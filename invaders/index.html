@@ -20,16 +20,16 @@
 const $ = id => document.getElementById(id);
 const input = { fire: false };
 Mugic.onFlick = () => { input.fire = true; };
-let range = 30;
-try { range = +localStorage.getItem('mugicInvadersRange') || 30; } catch (e) {}
+let range = 15;
+try { range = +localStorage.getItem('mugicInvadersRange2') || 15; } catch (e) {}
 Mugic.mountPanel($('bar'), $('tuning'), {
   keys: '← → space',
-  extraRows: [['Range', `<input type="range" id="range" min="10" max="60" value="${range}">`, 'rangeVal']],
+  extraRows: [['Range', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
 });
 $('rangeVal').textContent = '±' + range + '°';
 $('range').oninput = e => {
   range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
-  try { localStorage.setItem('mugicInvadersRange', range); } catch (e) {}
+  try { localStorage.setItem('mugicInvadersRange2', range); } catch (e) {}
 };
 
 const keys = {};

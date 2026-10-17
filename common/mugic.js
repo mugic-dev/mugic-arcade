@@ -8,17 +8,25 @@
 //   Mugic.trigger(on)           hysteresis + cooldown edge detector (same as the flick) for game inputs
 const Mugic = (() => {
   const SERVICE = 0x5501, DATA_CHAR = 0x113B;
-  const ACC = 0;                         // OSC float args: acc xyz, euler xyz (heading, roll, pitch), gyro, mag, quat
+  const ACC = 0;                         // OSC float args: acc xyz, euler xyz, gyro, mag, quat
   const STORE = 'mugicArcade';
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
     connected: false, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
-    settings: { rollAxis: 4, pitchAxis: 5, yawAxis: 3, invertRoll: false, invertPitch: false, invertYaw: false, thresh: 60 },
+    // as mounted in the MUGIC: euler X = yaw, Y = pitch (reversed), Z = roll
+    settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: false, invertPitch: true, invertYaw: false, thresh: 60 },
   };
   let raw = null, zero = { roll: 0, pitch: 0, yaw: 0, energy: 0 };
   const FLICK_BEFORE = 100, FLICK_AFTER = 150;   // ms of motion around the energy spike that give its direction
   let history = [];                               // recent { t, roll, pitch, yaw }
-  try { Object.assign(m.settings, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+  const AXIS_VERSION = 2;                         // bump when the default axes change, to drop stale saved ones
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE) || '{}');
+    if (saved.axisVersion !== AXIS_VERSION) {
+      for (const k in saved) { if (/Axis$|^invert/.test(k)) delete saved[k]; }
+    }
+    Object.assign(m.settings, saved, { axisVersion: AXIS_VERSION });
+  } catch (e) {}
   const save = () => { try { localStorage.setItem(STORE, JSON.stringify(m.settings)); } catch (e) {} };
   const cap = a => a[0].toUpperCase() + a.slice(1);
 
@@ -112,7 +120,7 @@ const Mugic = (() => {
   // Render the connect/calibrate bar into `barEl` and the tuning meters into `tuneEl`.
   // `axes` picks which of roll/pitch/yaw the game uses; extraRows are [label, html, valueId] triples.
   m.mountPanel = (barEl, tuneEl, { keys = '', axes = ['roll'], extraRows = [] } = {}) => {
-    const axisSel = a => `<select id="mg${cap(a)}Axis"><option value="4">euler Y</option><option value="5">euler Z</option><option value="3">euler X</option></select>`;
+    const axisSel = a => `<select id="mg${cap(a)}Axis"><option value="3">euler X</option><option value="4">euler Y</option><option value="5">euler Z</option></select>`;
     barEl.className = 'mg-bar';
     barEl.innerHTML = `
         <button id="mgConnect">Connect MUGIC</button>
