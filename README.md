@@ -37,6 +37,6 @@ Create `<game>/index.html`, include `../common/arcade.css` and `../common/mugic.
 - `Mugic.trigger(() => threshold)` — the same hysteresis (re-arm under half) + 250 ms cooldown edge detector, for your own inputs
 
 OSC float args used: `acc xyz` (0–2), `euler xyz` (3–5, degrees). As the BNO055 is mounted in the MUGIC (checked on
-a device): yaw = euler X, pitch = euler Y reversed, roll = euler Z — these are the defaults.
+a device): yaw = euler X, pitch = euler Y reversed, roll = euler Z reversed — these are the defaults.
 
 Sokoban levels are original and were checked solvable with a BFS solver.
