@@ -96,7 +96,7 @@ function throwBall(power, aimDeg, arcDeg = 60, spin = 0) {
 let measuring = null;
 Mugic.onFlick = () => {
   if (Scores.busy()) return;
-  if (game.state === 'title' || game.state === 'over') { newGame(); return; }
+  if (game.state === 'title') { newGame(); return; }
   if (game.state !== 'aim' || measuring) return;
   const before = aimBefore(250);
   measuring = { peak: Mugic.energy, until: performance.now() + 160, aim: before.aim, pitch: before.pitch, roll: before.roll };
@@ -130,7 +130,8 @@ function update(dt) {
     for (let i = 0; i < 4 && game.state === 'flight'; ++i) flight(ball, dt / 4);
   }
   if (game.result && (game.result.t -= dt) <= 0) {
-    if (game.result.in) setupThrow(); else endGame();
+    if (!game.result.in) { game.streak = 0; game.keyboard = false; }   // a fresh streak, ranked unless keys are used
+    setupThrow();
   }
 }
 
@@ -160,13 +161,15 @@ function done(made) {
   game.state = 'result';
   if (made) ++game.streak;
   game.result = { in: made, t: made ? 1.1 : 1.6, text: made ? (game.ball.bounced ? 'OFF THE RIM… IN!' : 'IN!') : 'MISS' };
+  if (!made) endStreak();
 }
 
 const ranked = () => !game.keyboard;
-function endGame() {
-  game.state = 'over';
+// A miss ends the streak: post it (quietly, with the remembered initials) and keep throwing, no game over.
+function endStreak() {
+  game.result.text = game.streak ? `MISS — STREAK ${game.streak}` : 'MISS';
   if (game.streak > game.hi) { game.hi = game.streak; try { localStorage.setItem('mugicTossHi', game.hi); } catch (e) {} }
-  if (game.streak > 0 && ranked()) Scores.submit({ game: 'toss', score: game.streak }).then(showBoard);
+  if (game.streak > 0 && ranked()) Scores.submit({ game: 'toss', score: game.streak, quiet: true }).then(showBoard);
 }
 const showBoard = () => Scores.top('toss').then(rows => Scores.render($('board'), rows));
 showBoard();
@@ -176,7 +179,7 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'Space') {
     e.preventDefault();
-    if (game.state === 'title' || game.state === 'over') { newGame(); game.keyboard = true; }
+    if (game.state === 'title') { newGame(); game.keyboard = true; }
     else if (game.state === 'aim' && charge === null && !e.repeat) charge = 0;
   }
   if (e.code.startsWith('Arrow')) { e.preventDefault(); if (game.state === 'aim') game.keyboard = true; }
@@ -266,16 +269,12 @@ function draw() {
   if (game.keyboard) ctx.fillText('KEYBOARD · NOT RANKED', W - 12, 26);
   ctx.textAlign = 'center';
   if (game.result) { ctx.fillStyle = game.result.in ? '#1a8f3a' : '#c0392b'; ctx.font = 'bold 34px ui-monospace, Menlo, monospace'; ctx.fillText(game.result.text, W / 2, 110); }
-  if (game.state === 'over') {
-    ctx.fillStyle = '#222'; ctx.font = 'bold 22px ui-monospace, Menlo, monospace'; ctx.fillText(`STREAK ${game.streak}`, W / 2, 150);
-    ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or space to play again', W / 2, 174);
-  }
 }
 
 let last = performance.now();
 (function loop(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (game.state !== 'title' && game.state !== 'over' && !Scores.busy()) update(dt);
+  if (game.state !== 'title' && !Scores.busy()) update(dt);
   draw();
   requestAnimationFrame(loop);
 })(last);

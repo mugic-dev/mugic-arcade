@@ -1,5 +1,6 @@
 // Global scoreboard on Supabase (REST, no SDK). Needs common/config.js (and common/mugic.js to submit).
-//   Scores.submit({ game, mode, level, score })  asks for initials and posts; requires a connected MUGIC
+//   Scores.submit({ game, mode, level, score, quiet })  asks for initials and posts; requires a connected MUGIC.
+//     quiet: reuse the remembered initials without asking (only asks the first time), no notice if not posted
 //   Scores.top(game, { mode, level, lowerIsBetter, limit })  -> [{ initials, device, score, created_at }]
 //   Scores.render(el, rows, unit, { dates })  fills a table (dates: add a date column)
 //   Scores.busy()  true while the initials dialog is open
@@ -46,14 +47,17 @@ const Scores = (() => {
     }));
   }
 
-  async function submit({ game, mode = 'normal', level = null, score }) {
+  async function submit({ game, mode = 'normal', level = null, score, quiet = false }) {
     if (!enabled()) return 'scoreboard not configured';
     if (!Mugic.connected || !Mugic.deviceCode) {
       const why = Mugic.connected ? 'the MUGIC device code was not read (reconnect the MUGIC)' : 'no MUGIC connected';
-      notice(`Score ${score} not posted: ${why}.`);
+      if (!quiet) notice(`Score ${score} not posted: ${why}.`);
       return why;
     }
-    const initials = await askInitials(`${score} — enter your initials (MUGIC ${Mugic.deviceCode})`);
+    let remembered = '';
+    try { remembered = localStorage.getItem('mugicArcadeInitials') || ''; } catch (e) {}
+    const initials = quiet && /^[A-Z]{3}$/.test(remembered) ? remembered
+      : await askInitials(`${score} — enter your initials (MUGIC ${Mugic.deviceCode})`);
     if (!initials) return 'skipped';
     const r = await fetch(`${SUPABASE_URL}/rest/v1/scores`, { method: 'POST', headers: headers(),
       body: JSON.stringify({ game, mode, level, score, initials, device: Mugic.deviceCode }) });
