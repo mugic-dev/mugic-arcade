@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Wall Breaker</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>WALL BREAKER</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="560"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll steers the paddle like a joystick: the further
+  you roll, the faster it moves (level = stop). Flick to launch the ball (or start a game). Where the ball hits the paddle
+  sets its angle. Keyboard: ← → move, space launches, Enter starts.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const PADDLE_SPEED = 650, KEY_SPEED = 500, DEADZONE = 2;   // px/s at full roll; px/s on keys; degrees counted as center
+let range = 15;
+try { range = +localStorage.getItem('mugicBricksRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → space',
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicBricksRange', range); } catch (e) {}
+};
+
+// ---------- Game ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, TOP = 40, WALL = 12;
+const COLS = 14, ROWS = 8, BW = (W - 2 * WALL) / COLS, BH = 18, BRICK_TOP = TOP + 60;
+// two rows per color, top rows worth more (as in the arcade original)
+const ROW_STYLE = [['#ff4d4d', 7], ['#ff4d4d', 7], ['#ff9f3a', 5], ['#ff9f3a', 5], ['#4dff88', 3], ['#4dff88', 3], ['#ffe14d', 1], ['#ffe14d', 1]];
+const R = 6, PADDLE_Y = H - 40, PADDLE_H = 12;
+
+const game = { state: 'title', score: 0, hi: 0, lives: 3, level: 1 };
+try { game.hi = +localStorage.getItem('mugicBricksHi') || 0; } catch (e) {}
+const keys = {};
+const input = { launch: false };
+
+function newGame() { game.score = 0; game.lives = 3; game.level = 1; newWall(); }
+
+function newWall() {
+  game.bricks = [];
+  for (let r = 0; r < ROWS; ++r) {
+    for (let c = 0; c < COLS; ++c) {
+      game.bricks.push({ x: WALL + c * BW, y: BRICK_TOP + r * BH, row: r, alive: true });
+    }
+  }
+  game.paddle = { x: W / 2, w: 90 };
+  serve();
+}
+
+function serve() {
+  game.ball = null; game.hits = 0; game.speedStep = 0; game.shrunk = false;
+  game.paddle.w = 90;
+  game.state = 'serve';
+}
+
+const baseSpeed = () => 300 + 25 * Math.min(game.level - 1, 8);
+const ballSpeed = () => baseSpeed() * (1 + 0.15 * game.speedStep);
+
+function launch() {
+  const a = (-90 + (Math.random() * 40 - 20)) * Math.PI / 180;
+  game.ball = { x: game.paddle.x, y: PADDLE_Y - R - 1, vx: Math.cos(a), vy: Math.sin(a) };
+  game.state = 'play';
+}
+
+// speed-ups as in the original: after 4 and 12 hits, and on first contact with the orange and red rows
+function speedUp(reason) {
+  if (game.speedReasons.has(reason)) return;
+  game.speedReasons.add(reason); ++game.speedStep;
+}
+
+function update(dt) {
+  if (game.state === 'title') return;
+  const p = game.paddle;
+  if (Mugic.connected && Math.abs(Mugic.roll) > DEADZONE) p.x += Math.max(-1, Math.min(1, Mugic.roll / range)) * PADDLE_SPEED * dt;
+  if (keys.ArrowLeft) p.x -= KEY_SPEED * dt;
+  if (keys.ArrowRight) p.x += KEY_SPEED * dt;
+  p.x = Math.max(WALL + p.w / 2, Math.min(W - WALL - p.w / 2, p.x));
+
+  if (game.state === 'serve') {
+    if (input.launch) { game.speedReasons = new Set(); launch(); }
+    input.launch = false;
+    return;
+  }
+  input.launch = false;
+  if (game.state !== 'play') return;
+
+  // sub-steps so a fast ball never tunnels through a brick
+  const b = game.ball, dist = ballSpeed() * dt, n = Math.ceil(dist / (R * 0.8));
+  for (let i = 0; i < n && game.state === 'play'; ++i) step(b, dist / n);
+}
+
+function step(b, d) {
+  b.x += b.vx * d; b.y += b.vy * d;
+  if (b.x < WALL + R) { b.x = WALL + R; b.vx = Math.abs(b.vx); }
+  if (b.x > W - WALL - R) { b.x = W - WALL - R; b.vx = -Math.abs(b.vx); }
+  if (b.y < TOP + WALL + R) {
+    b.y = TOP + WALL + R; b.vy = Math.abs(b.vy);
+    if (!game.shrunk) { game.shrunk = true; game.paddle.w = 60; }   // paddle shrinks after the ball reaches the top
+  }
+
+  const p = game.paddle;
+  if (b.vy > 0 && b.y + R >= PADDLE_Y && b.y - R <= PADDLE_Y + PADDLE_H && Math.abs(b.x - p.x) <= p.w / 2 + R) {
+    // hit position (-1 at the left edge .. +1 at the right) sets the angle, up to 60° off vertical
+    const off = Math.max(-1, Math.min(1, (b.x - p.x) / (p.w / 2)));
+    const a = (-90 + off * 60) * Math.PI / 180;
+    b.vx = Math.cos(a); b.vy = Math.sin(a); b.y = PADDLE_Y - R;
+  }
+  if (b.y - R > H) { loseBall(); return; }
+
+  for (const br of game.bricks) {
+    if (!br.alive) continue;
+    const nx = Math.max(br.x, Math.min(b.x, br.x + BW)), ny = Math.max(br.y, Math.min(b.y, br.y + BH));
+    if ((b.x - nx) ** 2 + (b.y - ny) ** 2 > R * R) continue;
+    br.alive = false;
+    game.score += ROW_STYLE[br.row][1];
+    // bounce off the side we came through: compare penetration depth on each axis
+    const px = Math.min(Math.abs(b.x - br.x), Math.abs(b.x - br.x - BW)), py = Math.min(Math.abs(b.y - br.y), Math.abs(b.y - br.y - BH));
+    if (px < py) b.vx = -b.vx; else b.vy = -b.vy;
+    ++game.hits;
+    if (game.hits === 4) speedUp('4');
+    if (game.hits === 12) speedUp('12');
+    if (br.row < 4 && br.row >= 2) speedUp('orange');
+    if (br.row < 2) speedUp('red');
+    if (game.bricks.every(x => !x.alive)) { ++game.level; game.state = 'clear'; game.clearTime = 1.5; }
+    break;
+  }
+}
+
+function loseBall() {
+  if (--game.lives <= 0) { endGame(); return; }
+  serve();
+}
+
+function endGame() {
+  game.state = 'over'; game.ball = null;
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicBricksHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'bricks', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('bricks').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'title' || game.state === 'over') newGame();
+  else input.launch = true;
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'Space') { input.launch = true; e.preventDefault(); }
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText('SCORE ' + String(game.score).padStart(4, '0'), 12, 26);
+  ctx.textAlign = 'center'; ctx.fillText('HI ' + String(game.hi).padStart(4, '0'), W / 2, 26);
+  ctx.textAlign = 'right'; ctx.fillText('WALL ' + game.level + '   BALLS ' + Math.max(0, game.lives), W - 12, 26);
+  ctx.fillStyle = '#8a93a8';
+  ctx.fillRect(0, TOP, WALL, H - TOP); ctx.fillRect(W - WALL, TOP, WALL, H - TOP); ctx.fillRect(0, TOP, W, WALL);
+
+  ctx.textAlign = 'center';
+  if (game.state === 'title') {
+    ctx.fillStyle = '#ffe14d'; ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('WALL BREAKER', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, H / 2 + 20);
+    return;
+  }
+  for (const br of game.bricks) {
+    if (!br.alive) continue;
+    ctx.fillStyle = ROW_STYLE[br.row][0];
+    ctx.fillRect(br.x + 1, br.y + 1, BW - 2, BH - 2);
+  }
+  const p = game.paddle;
+  ctx.fillStyle = '#6bc8ff'; ctx.fillRect(p.x - p.w / 2, PADDLE_Y, p.w, PADDLE_H);
+  const b = game.state === 'serve' ? { x: p.x, y: PADDLE_Y - R - 1 } : game.ball;
+  if (b) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(b.x, b.y, R, 0, Math.PI * 2); ctx.fill(); }
+  ctx.font = '16px ui-monospace, Menlo, monospace';
+  if (game.state === 'serve') { ctx.fillStyle = '#fff'; ctx.fillText('FLICK OR SPACE TO LAUNCH', W / 2, H / 2 + 60); }
+  if (game.state === 'clear') { ctx.fillStyle = '#4dff88'; ctx.fillText('WALL CLEARED!', W / 2, H / 2 + 60); }
+  if (game.state === 'over') {
+    ctx.fillStyle = '#ff5a5a'; ctx.font = '30px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', W / 2, H / 2 + 60);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', W / 2, H / 2 + 90);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'clear' && (game.clearTime -= dt) <= 0) newWall();
+  else if (!Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
