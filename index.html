@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MUGIC Arcade</title>
 <link rel="stylesheet" href="common/arcade.css">
+<script src="common/config.js"></script>
+<script src="common/scores.js"></script>
 <style>
   .games { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; width: min(640px, 100%); margin-top: 10px; }
   .games a { display: block; background: var(--panel); border: 1px solid #2a3040; border-radius: 8px; padding: 16px; text-decoration: none; color: var(--fg); }
@@ -19,6 +21,18 @@
   <a href="invaders/"><h2>Invaders</h2><p>Roll to steer the cannon, flick to fire.</p></a>
   <a href="sokoban/"><h2>倉庫番 Sōkoban</h2><p>Flick left/right/up/down to step and push crates, undo with a button.</p></a>
 </div>
+<div class="games">
+  <div class="scores"><h3>INVADERS — TOP 10</h3><div id="invBoard"></div></div>
+  <div class="scores"><h3>SŌKOBAN HARD — LEVEL RECORDS</h3><div id="sokBoard"></div></div>
+</div>
+<p class="help">Scores are posted with three initials and the code of the MUGIC that played (connected over Bluetooth).</p>
+<script>
+Scores.top('invaders').then(rows => Scores.render(document.getElementById('invBoard'), rows));
+// level records: best (fewest moves) per Sokoban level
+Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(l => Scores.top('sokoban', { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))
+  .then(levels => Scores.render(document.getElementById('sokBoard'),
+    levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${i + 1} ${x.initials}` }))), ' moves'));
+</script>
 <p class="help">Needs a MUGIC in BLE output mode (firmware ≥ 2.2.0) and Chrome or Edge. Every game also plays with the keyboard.</p>
 </body>
 </html>

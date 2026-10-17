@@ -1,0 +1,61 @@
+// Global scoreboard on Supabase (REST, no SDK). Needs common/config.js (and common/mugic.js to submit).
+//   Scores.submit({ game, mode, level, score })  asks for initials and posts; requires a connected MUGIC
+//   Scores.top(game, { mode, level, lowerIsBetter, limit })  -> [{ initials, device, score, created_at }]
+//   Scores.render(el, rows, unit)  fills a table
+//   Scores.busy()  true while the initials dialog is open
+const Scores = (() => {
+  const enabled = () => typeof SUPABASE_URL === 'string' && SUPABASE_URL && SUPABASE_ANON_KEY;
+  const headers = () => ({ apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY, 'Content-Type': 'application/json' });
+
+  async function top(game, { mode = 'normal', level = null, lowerIsBetter = false, limit = 10 } = {}) {
+    if (!enabled()) return [];
+    const q = new URLSearchParams({ select: 'initials,device,score,created_at', game: 'eq.' + game, mode: 'eq.' + mode,
+      order: `score.${lowerIsBetter ? 'asc' : 'desc'},created_at.asc`, limit });
+    q.set('level', level == null ? 'is.null' : 'eq.' + level);
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/scores?${q}`, { headers: headers() });
+    return r.ok ? r.json() : [];
+  }
+
+  // Arcade-style three-letter entry; resolves to 'ABC' or null if cancelled.
+  function askInitials(title) {
+    let last = '';
+    try { last = localStorage.getItem('mugicArcadeInitials') || ''; } catch (e) {}
+    const d = document.createElement('dialog');
+    d.className = 'sc-dialog';
+    d.innerHTML = `<form method="dialog"><p>${title}</p>
+      <input name="i" maxlength="3" pattern="[A-Za-z]{3}" required autocomplete="off" value="${last}">
+      <div><button value="ok">Post</button> <button value="cancel" formnovalidate>Skip</button></div></form>`;
+    document.body.append(d);
+    d.showModal();
+    const input = d.querySelector('input');
+    input.select();
+    input.oninput = () => { input.value = input.value.toUpperCase().replace(/[^A-Z]/g, ''); };
+    return new Promise(res => d.addEventListener('close', () => {
+      const v = d.returnValue === 'ok' ? input.value : null;
+      d.remove();
+      if (v) { try { localStorage.setItem('mugicArcadeInitials', v); } catch (e) {} }
+      res(v);
+    }));
+  }
+
+  async function submit({ game, mode = 'normal', level = null, score }) {
+    if (!enabled()) return 'scoreboard not configured';
+    if (!Mugic.connected || !Mugic.deviceCode) return 'connect a MUGIC to post scores';
+    const initials = await askInitials(`${score} — enter your initials (MUGIC ${Mugic.deviceCode})`);
+    if (!initials) return 'skipped';
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/scores`, { method: 'POST', headers: headers(),
+      body: JSON.stringify({ game, mode, level, score, initials, device: Mugic.deviceCode }) });
+    return r.ok ? 'posted' : 'post failed: ' + r.status;
+  }
+
+  function render(el, rows, unit = '') {
+    el.innerHTML = rows.length
+      ? '<table class="sc-table">' + rows.map((r, i) =>
+          `<tr><td>${i + 1}.</td><td>${r.initials}</td><td>${r.score}${unit}</td><td class="sc-dev">${r.device}</td></tr>`).join('') + '</table>'
+      : `<p class="sc-empty">${enabled() ? 'no scores yet' : 'scoreboard not configured'}</p>`;
+  }
+
+  const busy = () => !!document.querySelector('.sc-dialog');   // initials entry open: games ignore input
+
+  return { enabled, top, submit, render, busy };
+})();

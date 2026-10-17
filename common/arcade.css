@@ -19,3 +19,14 @@ canvas { background: #000; border: 1px solid #1d2230; max-width: 100%; height: a
 .mg-meter { height: 10px; background: #222838; position: relative; border-radius: 3px; overflow: hidden; }
 .mg-meter > i { position: absolute; top: 0; bottom: 0; background: var(--acc); }
 .mg-meter > b { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--warn); }
+
+.scores { width: min(640px, 100%); margin-top: 10px; background: var(--panel); padding: 10px; border-radius: 6px; }
+.scores h3 { margin: 0 0 6px; font-size: 14px; color: var(--acc); letter-spacing: 2px; }
+.sc-table { width: 100%; border-collapse: collapse; }
+.sc-table td { padding: 2px 6px; }
+.sc-table td:nth-child(3) { text-align: right; }
+.sc-dev, .sc-empty { color: var(--dim); }
+.sc-empty { margin: 0; }
+.sc-dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--acc); border-radius: 8px; text-align: center; }
+.sc-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+.sc-dialog input { width: 5ch; font-size: 28px; text-align: center; letter-spacing: 6px; text-transform: uppercase; margin: 6px 0 12px; }

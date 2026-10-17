@@ -15,6 +15,7 @@
   <button id="normalBtn">Normal (1)</button><button id="hardBtn">Hard (2)</button>
   <button id="undoBtn" hidden>Undo (U)</button><button id="restartBtn" hidden>Restart (R)</button>
 </div>
+<div class="scores"><h3 id="boardTitle">GLOBAL TOP 10</h3><div id="board"></div></div>
 <div id="tuning"></div>
 <p class="help">Click Connect, then Calibrate center. Each flick is one step: flick left/right (yaw) or up/down (pitch).
   Undo / Restart are the buttons under the board; any flick goes to the next level once solved.
@@ -23,6 +24,8 @@
   Keyboard: arrows move, U undo, R restart, N / P next / previous level.</p>
 
 <script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
 <script>
 // Level format (XSB): # wall, space floor, . goal, $ box, * box on goal, @ player, + player on goal.
 // All levels checked solvable with a BFS solver.
@@ -103,6 +106,7 @@ function loadLevel(n) {
   const W = Math.max(...rows.map(r => r.length)), H = rows.length;
   Object.assign(game, { n, W, H, walls: new Set(), goals: new Set(), boxes: new Set(), floor: new Set(),
                         history: [], moves: 0, pushes: 0, state: 'play' });
+  showBoard();
   rows.forEach((r, y) => [...r.padEnd(W)].forEach((c, x) => {
     const i = y * W + x;
     if (c === '#') game.walls.add(i);
@@ -145,6 +149,7 @@ function move(dir) {
     game.state = 'won';
     const best = saved.bestHard[game.n];
     if (hard && (!best || game.moves < best)) { saved.bestHard[game.n] = game.moves; save(); }
+    if (hard) Scores.submit({ game: 'sokoban', mode: 'hard', level: game.n + 1, score: game.moves }).then(showBoard);
   }
 }
 
@@ -172,12 +177,20 @@ $('normalBtn').onclick = () => chooseMode('normal');
 $('hardBtn').onclick = () => chooseMode('hard');
 $('restartBtn').onclick = () => loadLevel(game.n);
 
+// global board: Hard-mode fewest moves for the current level
+function showBoard() {
+  $('boardTitle').textContent = `GLOBAL HARD — LEVEL ${game.n + 1} (fewest moves)`;
+  Scores.top('sokoban', { mode: 'hard', level: game.n + 1, lowerIsBetter: true, limit: 5 })
+    .then(rows => Scores.render($('board'), rows, ' moves'));
+}
+
 function gotoLevel(n) { if (n >= 0 && n < LEVELS.length) loadLevel(n); }
 
 function next() { if (game.n + 1 < LEVELS.length) loadLevel(game.n + 1); else game.state = 'done'; }
 
 // A flick's direction is the axis that turned most during it: yaw -> left/right, pitch -> up/down.
 Mugic.onFlickDir = d => {
+  if (Scores.busy()) return;
   if (!mode) { if (Math.abs(d.yaw) >= saved.minTurn) chooseMode(d.yaw < 0 ? 'normal' : 'hard'); return; }
   if (game.state === 'won') { next(); return; }
   if (game.state !== 'play') return;
@@ -191,6 +204,7 @@ Mugic.onFlickDir = d => {
 };
 
 addEventListener('keydown', e => {
+  if (Scores.busy()) return;
   if (!mode) {
     if (e.code === 'Digit1') chooseMode('normal');
     else if (e.code === 'Digit2') chooseMode('hard');

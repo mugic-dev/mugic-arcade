@@ -40,3 +40,15 @@ OSC float args used: `acc xyz` (0–2), `euler xyz` (3–5, degrees). As the BNO
 a device): yaw = euler X, pitch = euler Y, roll = euler Z reversed — these are the defaults.
 
 Sokoban levels are original and were checked solvable with a BFS solver.
+
+## Global scoreboard (Supabase)
+
+Scores are posted with three initials plus the MUGIC's device code (last 6 hex of its label MAC, read over
+Bluetooth from `GetConfiguration`), and only while a MUGIC is connected. Invaders: highest score. Sōkoban: Hard mode
+only, fewest moves per level. This is a page-side check — it stops casual fakes, not someone calling the API directly;
+device-signed scores (firmware challenge/response) are the planned follow-up.
+
+Setup (once):
+1. Create a free project at <https://supabase.com>.
+2. SQL Editor → New query → paste `supabase/schema.sql` → Run.
+3. Project Settings → API: copy the Project URL and the `anon` public key into `common/config.js`.

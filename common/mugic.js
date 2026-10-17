@@ -6,13 +6,14 @@
 //   Mugic.onFlickDir(d)         called ~150 ms after a flick with d = {roll, pitch, yaw}: the largest angle
 //                               change (degrees, signed) over the flick window, to tell which way it went
 //   Mugic.trigger(on)           hysteresis + cooldown edge detector (same as the flick) for game inputs
+//   Mugic.deviceCode            last 6 hex digits of the device's label MAC (e.g. 'baf234'), once read
 const Mugic = (() => {
-  const SERVICE = 0x5501, DATA_CHAR = 0x113B;
+  const SERVICE = 0x5501, CONFIG_CHAR = 0x113A, DATA_CHAR = 0x113B;
   const ACC = 0;                         // OSC float args: acc xyz, euler xyz, gyro, mag, quat
   const STORE = 'mugicArcade';
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
-    connected: false, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
+    connected: false, deviceCode: null, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
     // as mounted in the MUGIC: euler X = yaw, Y = pitch, Z = roll (reversed)
     settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: false, invertYaw: false, thresh: 60 },
   };
@@ -97,24 +98,53 @@ const Mugic = (() => {
 
   m.calibrate = () => { if (raw) zero = { ...raw }; };
 
+  // Minimal protobuf walk: the bytes of length-delimited field `num`, or null.
+  function pbField(bytes, num) {
+    let i = 0;
+    const varint = () => { let v = 0, s = 0, b; do { b = bytes[i++]; v += (b & 0x7f) * 2 ** s; s += 7; } while (b & 0x80); return v; };
+    while (i < bytes.length) {
+      const tag = varint(), wt = tag & 7;
+      if (wt === 0) varint();
+      else if (wt === 2) { const n = varint(); if (tag >>> 3 === num) return bytes.subarray(i, i + n); i += n; }
+      else if (wt === 5) i += 4;
+      else if (wt === 1) i += 8;
+      else return null;
+    }
+    return null;
+  }
+
+  // ConfigTaskResponse.get_configuration_response (8) -> GetConfigurationResponse.mac_addr (12)
+  function onConfig(e) {
+    const resp = pbField(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength), 8);
+    const mac = resp && pbField(resp, 12);
+    if (!mac || mac.length < 6) return;
+    m.deviceCode = String.fromCharCode(...mac).toLowerCase().replace(/[^0-9a-f]/g, '').slice(-6);
+    status(`connected: ${devName} (${m.deviceCode})`, true);
+  }
+
   m.connect = async () => {
     if (!navigator.bluetooth) { alert('This browser has no Web Bluetooth — use Chrome or Edge.'); return; }
     try {
       const dev = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'mu' }], optionalServices: [SERVICE] });
-      dev.addEventListener('gattserverdisconnected', () => { m.connected = false; status('disconnected', false); });
+      dev.addEventListener('gattserverdisconnected', () => { m.connected = false; m.deviceCode = null; status('disconnected', false); });
       const server = await dev.gatt.connect();
       const ch = await (await server.getPrimaryService(SERVICE)).getCharacteristic(DATA_CHAR);
       ch.addEventListener('characteristicvaluechanged', onPacket);
       await ch.startNotifications();
-      m.connected = true;
+      m.connected = true; devName = dev.name;
       status('connected: ' + dev.name, true);
+      // ask for the configuration (ConfigTaskCommand.get_configuration = field 8, empty) to learn the device code
+      const cfg = await (await server.getPrimaryService(SERVICE)).getCharacteristic(CONFIG_CHAR);
+      cfg.addEventListener('characteristicvaluechanged', onConfig);
+      await cfg.startNotifications();
+      await cfg.writeValue(new Uint8Array([0x42, 0x00]));
       setTimeout(m.calibrate, 500);
     } catch (err) {
       console.error(err); status('connect failed: ' + err.message, false);
     }
   };
 
-  let statusEl = null;
+  let statusEl = null, devName = '';
   function status(text, ok) { if (statusEl) { statusEl.textContent = text; statusEl.classList.toggle('ok', ok); } }
 
   // Render the connect/calibrate bar into `barEl` and the tuning meters into `tuneEl`.
