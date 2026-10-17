@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Rescue Chopper</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>RESCUE CHOPPER</h1>
+<div id="bar"></div>
+<canvas id="game" width="720" height="400"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll flies left/right (the further, the faster),
+  tip up to climb and down to descend. Hold roll level to hover: the chopper turns to face you and its shots drop as
+  bombs (for tanks). Flick to fire. Shoot the barracks open, land gently near the hostages (not on them!) so they can
+  run aboard — 16 at most — and fly them back to base on the right. Tanks shell you on the ground; jets join later.
+  Keyboard (practice, not posted): arrows fly, space fire.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 3, MAX_VX = 230, MAX_VY = 150, ACCEL = 2.5;    // px/s; velocity follows the stick at this rate (1/s)
+let range = 15;
+try { range = +localStorage.getItem('mugicChopperRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows space',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicChopperRange', range); } catch (e) {}
+};
+
+// ---------- World ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, GROUND = H - 40, WORLD = 4000, BASE_X = 3860, CEIL = 40;
+const BARRACKS_X = [3100, 2400, 1700, 1000], PER_BARRACKS = 16, CAPACITY = 16, HELI_H = 18;
+const PTS = { saved: 1000, tank: 150, jet: 300 };
+
+const game = { state: 'title', score: 0, hi: 0 };
+try { game.hi = +localStorage.getItem('mugicChopperHi') || 0; } catch (e) {}
+const keys = {};
+
+function newGame() {
+  Object.assign(game, { state: 'play', score: 0, lives: 3, saved: 0, killed: 0, trips: 0, keyboard: false,
+    barracks: BARRACKS_X.map(x => ({ x, open: false })), hostages: [], tanks: [], jets: [], shots: [], shells: [], booms: [],
+    tankTimer: 6, jetTimer: 12 });
+  newHeli();
+}
+
+function newHeli() {
+  game.heli = { x: BASE_X - 60, y: GROUND - HELI_H, vx: 0, vy: 0, face: -1, hover: 0, hp: 3, aboard: 0, landed: true, dead: 0, boardT: 0 };
+}
+
+const heliDown = h => h.y >= GROUND - HELI_H - 0.5;
+
+// ---------- Update ----------
+function update(dt) {
+  const h = game.heli;
+  game.booms = game.booms.filter(b => (b.t -= dt) > 0);
+  if (h.dead) {
+    if ((h.dead -= dt) <= 0) { if (--game.lives <= 0) { endGame(); return; } newHeli(); }
+  } else flyHeli(h, dt);
+
+  updateHostages(dt);
+  updateTanks(dt);
+  updateJets(dt);
+  updateShots(dt);
+  if (game.saved + game.killed >= BARRACKS_X.length * PER_BARRACKS && !game.heli.aboard) endGame();
+}
+
+function flyHeli(h, dt) {
+  const kb = keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown;
+  if (kb) game.keyboard = true;
+  const sx = keys.ArrowLeft ? -1 : keys.ArrowRight ? 1 : Mugic.connected && Math.abs(Mugic.roll) > DEADZONE ? Math.max(-1, Math.min(1, Mugic.roll / range)) : 0;
+  const sy = keys.ArrowUp ? -1 : keys.ArrowDown ? 1 : Mugic.connected && Math.abs(Mugic.pitch) > DEADZONE ? Math.max(-1, Math.min(1, -Mugic.pitch / range)) : 0;
+  const k = Math.min(1, ACCEL * dt);
+  h.vx += (sx * MAX_VX - h.vx) * k;
+  h.vy += (sy * MAX_VY - h.vy) * k;
+  if (heliDown(h) && h.vy >= 0) h.vx *= 1 - Math.min(1, 6 * dt);         // skids on the ground
+  // facing: the way you fly; hovering (stick centered) turns the chopper toward you
+  if (sx) { h.face = Math.sign(sx); h.hover = 0; } else if ((h.hover += dt) > 0.4) h.face = 0;
+
+  h.x = Math.max(30, Math.min(WORLD - 30, h.x + h.vx * dt));
+  const wasDown = heliDown(h);
+  h.y += h.vy * dt;
+  if (h.y < CEIL) { h.y = CEIL; h.vy = Math.max(0, h.vy); }
+  if (h.y >= GROUND - HELI_H) {
+    if (!wasDown && h.vy > 110) damage(1);                                  // hard landing
+    h.y = GROUND - HELI_H; h.vy = Math.min(0, h.vy);
+    if (!wasDown) for (const p of game.hostages) if (p.state === 'out' && Math.abs(p.x - h.x) < 22) kill(p);   // landed on them
+  }
+  h.landed = heliDown(h) && Math.abs(h.vx) < 25;
+  if (h.landed && h.aboard && Math.abs(h.x - BASE_X) < 160 && (h.boardT -= dt) <= 0) {      // unload at base
+    --h.aboard; h.boardT = 0.2;
+    game.hostages.push({ x: h.x, state: 'home', t: 0 });
+    if (!h.aboard) ++game.trips;                                            // difficulty rises with each trip
+  }
+}
+
+function damage(n) {
+  const h = game.heli;
+  if (h.dead) return;
+  if ((h.hp -= n) <= 0) {
+    h.dead = 2.5; boom(h.x, h.y, 30);
+    game.killed += h.aboard; h.aboard = 0;
+  }
+}
+
+function kill(p) { p.state = 'dead'; p.t = 1; ++game.killed; }
+function boom(x, y, r = 16) { game.booms.push({ x, y, r, t: 0.5 }); }
+
+function updateHostages(dt) {
+  const h = game.heli;
+  for (const p of game.hostages) {
+    if (p.state === 'out') {
+      const dx = h.x - p.x;
+      if (h.landed && !h.dead && h.aboard < CAPACITY && Math.abs(dx) < 380) {
+        p.x += Math.sign(dx) * 70 * dt; p.run = (p.run || 0) + dt;
+        if (Math.abs(dx) < 12 && h.boardT <= 0) { p.state = 'aboard'; ++h.aboard; h.boardT = 0.25; }
+      } else { p.x += Math.sin(p.t * 1.7 + p.seed) * 14 * dt; p.wave = Math.sin(p.t * 6 + p.seed) > 0; }
+      p.t += dt;
+    } else if (p.state === 'home') {
+      p.x += 60 * dt;
+      if (p.x > BASE_X + 60) { p.state = 'saved'; ++game.saved; addScore(PTS.saved); }
+    } else if (p.state === 'dead') p.t -= dt;
+  }
+  if (h.boardT > 0 && h.landed) h.boardT -= dt;
+  game.hostages = game.hostages.filter(p => p.state !== 'aboard' && p.state !== 'saved' && !(p.state === 'dead' && p.t <= 0));
+}
+
+function openBarracks(b) {
+  b.open = true; boom(b.x, GROUND - 20, 26);
+  for (let i = 0; i < PER_BARRACKS; ++i) game.hostages.push({ x: b.x + (Math.random() - 0.5) * 120, state: 'out', t: 0, seed: Math.random() * 9 });
+}
+
+// tanks roll in once a barracks is open and shell the chopper when it's near
+function updateTanks(dt) {
+  const h = game.heli, opened = game.barracks.filter(b => b.open);
+  if (opened.length && (game.tankTimer -= dt) <= 0) {
+    game.tankTimer = Math.max(5, 12 - 1.5 * game.trips) * (0.7 + Math.random() * 0.6);
+    if (game.tanks.length < 2 + game.trips) {
+      const b = opened[Math.floor(Math.random() * opened.length)];
+      game.tanks.push({ x: b.x - 400 - Math.random() * 300, dir: 1, fire: 2, hp: 1 });
+    }
+  }
+  for (const t of game.tanks) {
+    const dx = h.x - t.x;
+    if (Math.abs(dx) > 60) { t.dir = Math.sign(dx); t.x += t.dir * 45 * dt; }   // close in, then stop to aim up
+    t.x = Math.max(20, Math.min(BASE_X - 300, t.x));                    // they don't come up to the base
+    if (!h.dead && Math.abs(dx) < 380 && (t.fire -= dt) <= 0) {
+      t.fire = Math.max(2, 3.5 - 0.3 * game.trips);
+      // a lobbed shell aimed roughly at where the chopper is
+      const T = 1.1, gy = 260, miss = (Math.random() - 0.5) * 90;
+      game.shells.push({ x: t.x, y: GROUND - 16, vx: (dx + miss) / T, vy: (h.y - (GROUND - 16)) / T - gy * T / 2, g: gy });
+    }
+  }
+}
+
+function updateJets(dt) {
+  const h = game.heli;
+  if (game.trips >= 1 && (game.jetTimer -= dt) <= 0) {
+    game.jetTimer = Math.max(6, 14 - 2 * game.trips) * (0.7 + Math.random() * 0.6);
+    const left = Math.random() < 0.5;
+    game.jets.push({ x: h.x + (left ? -1 : 1) * (W * 0.7), y: Math.max(CEIL + 10, Math.min(GROUND - 60, h.y + (Math.random() - 0.5) * 60)), vx: left ? 400 : -400, fired: false, hp: 1 });
+  }
+  for (const j of game.jets) {
+    j.x += j.vx * dt;
+    const ahead = (h.x - j.x) * Math.sign(j.vx);
+    if (!j.fired && !h.dead && ahead > 120 && ahead < 320 && Math.abs(h.y - j.y) < 50) {
+      j.fired = true; game.shells.push({ x: j.x, y: j.y, vx: j.vx * 1.4, vy: 0, g: 0, missile: true });
+    }
+  }
+  game.jets = game.jets.filter(j => Math.abs(j.x - h.x) < W * 1.2);
+}
+
+function updateShots(dt) {
+  const h = game.heli;
+  for (const s of game.shots) {
+    s.x += s.vx * dt; s.y += s.vy * dt; s.vy += (s.bomb ? 400 : 0) * dt; s.t -= dt;
+    for (const b of game.barracks) if (!b.open && Math.abs(s.x - b.x) < 34 && s.y > GROUND - 40) { openBarracks(b); s.t = 0; }
+    for (const t of game.tanks) if (Math.abs(s.x - t.x) < 18 && s.y > GROUND - 22) { t.hp = 0; s.t = 0; boom(t.x, GROUND - 10); addScore(PTS.tank); }
+    for (const j of game.jets) if (Math.abs(s.x - j.x) < 22 && Math.abs(s.y - j.y) < 10) { j.hp = 0; s.t = 0; boom(j.x, j.y); addScore(PTS.jet); }
+    // stray fire is dangerous to hostages too
+    if (s.y >= GROUND - 4) { for (const p of game.hostages) if (p.state === 'out' && Math.abs(p.x - s.x) < 10) kill(p); s.t = 0; }
+  }
+  game.shots = game.shots.filter(s => s.t > 0);
+  game.tanks = game.tanks.filter(t => t.hp > 0);
+  game.jets = game.jets.filter(j => j.hp > 0);
+
+  for (const s of game.shells) {
+    s.x += s.vx * dt; s.y += s.vy * dt; s.vy += s.g * dt;
+    if (!h.dead && Math.abs(s.x - h.x) < 22 && Math.abs(s.y - (h.y + 6)) < 14) { s.hit = true; damage(1); boom(s.x, s.y, 10); }
+    if (s.y >= GROUND) { s.hit = true; boom(s.x, GROUND - 4, 12); for (const p of game.hostages) if (p.state === 'out' && Math.abs(p.x - s.x) < 14) kill(p); }
+  }
+  game.shells = game.shells.filter(s => !s.hit && Math.abs(s.x - h.x) < W * 1.5);
+}
+
+function fire() {
+  const h = game.heli;
+  if (h.dead || game.shots.length >= 3) return;
+  if (h.face === 0) game.shots.push({ x: h.x, y: h.y + HELI_H, vx: h.vx, vy: 60, bomb: true, t: 3 });
+  else game.shots.push({ x: h.x + h.face * 26, y: h.y + 10, vx: h.face * 520 + h.vx, vy: heliDown(h) ? 0 : 40, t: 1.2 });
+}
+
+function addScore(n) { game.score += n; }
+
+const ranked = () => !game.keyboard;
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicChopperHi', game.hi); } catch (e) {} }
+  if (game.score > 0 && ranked()) Scores.submit({ game: 'chopper', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('chopper').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state !== 'play') newGame(); else fire();
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'Space') { e.preventDefault(); if (game.state === 'play') { game.keyboard = true; fire(); } }
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'Enter' && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Drawing ----------
+function drawHeli(x, y, face, t, vx = 0) {
+  ctx.save(); ctx.translate(x, y);
+  const tilt = face ? Math.max(-0.25, Math.min(0.25, vx / MAX_VX * 0.25)) : 0;
+  ctx.rotate(tilt);
+  ctx.fillStyle = '#2f6b3a'; ctx.strokeStyle = '#1b3d22'; ctx.lineWidth = 2;
+  if (face) {
+    ctx.beginPath(); ctx.ellipse(face * 4, 8, 18, 9, 0, 0, Math.PI * 2); ctx.fill();               // cabin
+    ctx.fillRect(face > 0 ? -34 : 12, 5, 22, 4);                                                     // tail boom
+    ctx.fillStyle = '#9fd0ff'; ctx.beginPath(); ctx.ellipse(face * 13, 6, 6, 5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#555'; ctx.beginPath(); ctx.arc(-face * 34, 7, 5 * Math.abs(Math.sin(t * 30)), 0, Math.PI * 2); ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.ellipse(0, 8, 13, 10, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#9fd0ff'; ctx.beginPath(); ctx.ellipse(0, 6, 8, 6, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-12, 18); ctx.lineTo(12, 18); ctx.moveTo(-8, 14); ctx.lineTo(-8, 18); ctx.moveTo(8, 14); ctx.lineTo(8, 18); ctx.stroke();   // skids
+  const blade = 30 * Math.abs(Math.cos(t * 25));
+  ctx.beginPath(); ctx.moveTo(-blade, -2); ctx.lineTo(blade, -2); ctx.moveTo(0, -2); ctx.lineTo(0, 0); ctx.stroke();
+  ctx.restore();
+}
+
+function person(x, y, color, wave, run) {
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(x, y - 13, 2.5, 0, Math.PI * 2); ctx.fill();
+  const leg = run ? Math.sin(run * 20) * 4 : 2;
+  ctx.beginPath(); ctx.moveTo(x, y - 10); ctx.lineTo(x, y - 5); ctx.lineTo(x + leg, y); ctx.moveTo(x, y - 5); ctx.lineTo(x - leg, y);
+  ctx.moveTo(x, y - 9); ctx.lineTo(x + 4, wave ? y - 15 : y - 6); ctx.moveTo(x, y - 9); ctx.lineTo(x - 4, y - 6); ctx.stroke();
+}
+
+function draw() {
+  const sky = ctx.createLinearGradient(0, 0, 0, GROUND);
+  sky.addColorStop(0, '#2a62b8'); sky.addColorStop(1, '#f2c27a');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  const h = game.heli, cam = h ? Math.max(0, Math.min(WORLD - W, h.x - W / 2)) : WORLD - W, t = performance.now() / 1000;
+  ctx.fillStyle = '#b07a4a';                                                              // far mountains
+  for (let i = -1; i < 8; ++i) { const x = i * 140 - (cam * 0.3) % 140; ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x + 70, GROUND - 90 - (i % 3) * 25); ctx.lineTo(x + 140, GROUND); ctx.fill(); }
+  ctx.fillStyle = '#d9a35e'; ctx.fillRect(0, GROUND, W, H - GROUND);
+  const sx = x => x - cam;
+
+  ctx.textAlign = 'left'; ctx.font = 'bold 14px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#fff';
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.font = 'bold 40px ui-monospace, Menlo, monospace'; ctx.fillText('RESCUE CHOPPER', W / 2, 150);
+    ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, 190);
+    drawHeli(W / 2, 230, 1, t);
+    return;
+  }
+  // base with flag
+  ctx.fillStyle = '#e8e8e8'; ctx.fillRect(sx(BASE_X) - 10, GROUND - 46, 90, 46);
+  ctx.fillStyle = '#555'; ctx.fillRect(sx(BASE_X), GROUND - 22, 14, 22);
+  ctx.fillStyle = '#333'; ctx.fillRect(sx(BASE_X) + 60, GROUND - 90, 3, 44); ctx.fillStyle = '#ff4d4d'; ctx.fillRect(sx(BASE_X) + 63, GROUND - 90, 22, 13);
+  ctx.strokeStyle = '#fff'; ctx.setLineDash([6, 6]); ctx.beginPath(); ctx.moveTo(sx(BASE_X - 160), GROUND + 2); ctx.lineTo(sx(BASE_X), GROUND + 2); ctx.stroke(); ctx.setLineDash([]);
+  for (const b of game.barracks) {
+    ctx.fillStyle = b.open ? '#6b4a2b' : '#8b6a3b'; ctx.fillRect(sx(b.x) - 34, GROUND - 40, 68, 40);
+    ctx.fillStyle = b.open ? '#222' : '#5a3a1a'; ctx.fillRect(sx(b.x) - 8, GROUND - 22, 16, 22);
+    if (!b.open) { ctx.fillStyle = '#fff'; ctx.font = '10px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center'; ctx.fillText('16', sx(b.x), GROUND - 28); }
+  }
+  for (const p of game.hostages) {
+    if (p.state === 'dead') { ctx.fillStyle = '#7a1a1a'; ctx.fillRect(sx(p.x) - 4, GROUND - 3, 8, 3); }
+    else person(sx(p.x), GROUND, '#fff', p.wave && p.state === 'out', p.state === 'home' ? t : p.run && h.landed ? p.run : 0);
+  }
+  for (const tk of game.tanks) {
+    const x = sx(tk.x); ctx.fillStyle = '#4a5a2a'; ctx.fillRect(x - 16, GROUND - 12, 32, 12); ctx.fillRect(x - 8, GROUND - 19, 16, 8);
+    ctx.strokeStyle = '#4a5a2a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x, GROUND - 16); ctx.lineTo(x + tk.dir * 16, GROUND - 26); ctx.stroke();
+  }
+  for (const j of game.jets) {
+    const x = sx(j.x), f = Math.sign(j.vx); ctx.fillStyle = '#888';
+    ctx.beginPath(); ctx.moveTo(x + f * 22, j.y); ctx.lineTo(x - f * 18, j.y - 6); ctx.lineTo(x - f * 18, j.y + 6); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x, j.y); ctx.lineTo(x - f * 12, j.y - 14); ctx.lineTo(x - f * 16, j.y); ctx.fill();
+  }
+  ctx.fillStyle = '#ffe14d'; for (const s of game.shots) ctx.fillRect(sx(s.x) - 2, s.y - 2, s.bomb ? 4 : 8, 4);
+  ctx.fillStyle = '#ff6b3a'; for (const s of game.shells) { ctx.beginPath(); ctx.arc(sx(s.x), s.y, s.missile ? 3 : 2.5, 0, Math.PI * 2); ctx.fill(); }
+  if (h && !h.dead) drawHeli(sx(h.x), h.y, h.face, t, h.vx);
+  for (const b of game.booms) { ctx.fillStyle = `rgba(255,${120 + Math.floor(b.t * 200)},40,${b.t * 2})`; ctx.beginPath(); ctx.arc(sx(b.x), b.y, b.r * (1.3 - b.t), 0, Math.PI * 2); ctx.fill(); }
+
+  // HUD: saved / aboard / killed like the original, plus score and choppers
+  ctx.textAlign = 'left'; ctx.font = 'bold 14px ui-monospace, Menlo, monospace';
+  ctx.fillStyle = '#fff'; ctx.fillText('SCORE ' + game.score, 10, 20); ctx.fillText('HI ' + game.hi, 170, 20);
+  ctx.fillStyle = '#4dff88'; ctx.fillText('SAVED ' + game.saved, 300, 20);
+  ctx.fillStyle = '#ffe14d'; ctx.fillText(`ABOARD ${h.aboard}/${CAPACITY}`, 410, 20);
+  ctx.fillStyle = '#ff5a5a'; ctx.fillText('KILLED ' + game.killed, 560, 20);
+  ctx.fillStyle = '#fff'; ctx.fillText('🚁'.repeat(Math.max(0, game.lives)) + '  ' + '■'.repeat(Math.max(0, h.hp)), 10, 40);
+  // minimap
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(W - 210, 30, 200, 10);
+  const mx = x => W - 210 + x / WORLD * 200;
+  for (const b of game.barracks) { ctx.fillStyle = b.open ? '#777' : '#c8a060'; ctx.fillRect(mx(b.x) - 2, 31, 4, 8); }
+  ctx.fillStyle = '#fff'; ctx.fillRect(mx(BASE_X) - 2, 31, 4, 8); ctx.fillStyle = '#4dff88'; ctx.fillRect(mx(h.x) - 1.5, 30, 3, 10);
+  if (game.keyboard) { ctx.fillStyle = '#fff'; ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center'; ctx.fillText('KEYBOARD · NOT RANKED', W / 2, 56); }
+  if (game.state === 'over') {
+    ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 120, W, 90);
+    ctx.fillStyle = '#ffe14d'; ctx.font = 'bold 28px ui-monospace, Menlo, monospace'; ctx.fillText(`${game.saved} SAVED`, W / 2, 160);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to fly again', W / 2, 190);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
