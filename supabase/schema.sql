@@ -13,6 +13,8 @@ create table if not exists public.scores (
 create index if not exists scores_board on public.scores (game, mode, level, score);
 
 alter table public.scores enable row level security;
+-- newer projects don't auto-grant new tables to the API roles; RLS below still limits what anon may do
+grant select, insert on public.scores to anon;
 drop policy if exists "read scores" on public.scores;
 create policy "read scores" on public.scores for select to anon using (true);
 drop policy if exists "add scores" on public.scores;
