@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Space Rocks</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>SPACE ROCKS</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="560"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll turns the ship (the further, the faster), tip it
+  forward (pitch down) to thrust, flick to fire. Keyboard: ← → turn, ↑ thrust, space fire, H hyperspace, Enter start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 3;                     // degrees of tilt that still count as center
+const TURN_RATE = 4.7, THRUST = 320, DRAG = 0.5, MAX_SPEED = 380;   // rad/s, px/s², 1/s, px/s at full tilt
+let range = 15;
+try { range = +localStorage.getItem('mugicRocksRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → ↑ space H',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full turn/thrust at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicRocksRange', range); } catch (e) {}
+};
+
+// ---------- Game ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, TOP = 34;
+const SIZES = { 3: { r: 42, pts: 20, speed: 50 }, 2: { r: 22, pts: 50, speed: 85 }, 1: { r: 11, pts: 100, speed: 130 } };
+const game = { state: 'title', score: 0, hi: 0, lives: 3, wave: 0 };
+try { game.hi = +localStorage.getItem('mugicRocksHi') || 0; } catch (e) {}
+const keys = {};
+const input = { fire: false, hyper: false };
+
+const wrap = o => {
+  o.x = (o.x + W) % W;
+  o.y = TOP + ((o.y - TOP + (H - TOP)) % (H - TOP));
+};
+// shortest wrapped distance, so collisions work across the screen edges
+const dist = (a, b) => {
+  let dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+  dx = Math.min(dx, W - dx); dy = Math.min(dy, H - TOP - dy);
+  return Math.hypot(dx, dy);
+};
+
+function rock(size, x, y) {
+  const a = Math.random() * Math.PI * 2, s = SIZES[size].speed * (0.6 + Math.random() * 0.8) * (1 + 0.05 * game.wave);
+  const shape = Array.from({ length: 11 }, () => 0.72 + Math.random() * 0.35);   // jagged outline
+  return { size, x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, rot: 0, spin: (Math.random() - 0.5) * 1.5, shape };
+}
+
+function newGame() { game.score = 0; game.lives = 3; game.wave = 0; game.nextLife = 10000; game.state = 'play'; newShip(); nextWave(); }
+
+function newShip() {
+  game.ship = { x: W / 2, y: TOP + (H - TOP) / 2, vx: 0, vy: 0, a: -Math.PI / 2, safe: 2.5, thrusting: false };
+  game.shots = []; game.respawn = 0;
+}
+
+function nextWave() {
+  ++game.wave;
+  game.rocks = [];
+  for (let i = 0; i < Math.min(3 + game.wave, 11); ++i) {
+    // start along the edges, away from the ship
+    const edge = Math.random() < 0.5;
+    game.rocks.push(rock(3, edge ? Math.random() * W : 0, edge ? TOP : TOP + Math.random() * (H - TOP)));
+  }
+  game.ufo = null; game.ufoTimer = 12 + Math.random() * 8; game.ufoShots = [];
+}
+
+function addScore(n) {
+  game.score += n;
+  if (game.score >= game.nextLife) { ++game.lives; game.nextLife += 10000; }
+}
+
+function explode(x, y, n = 10) {
+  for (let i = 0; i < n; ++i) {
+    const a = Math.random() * Math.PI * 2, s = 40 + Math.random() * 120;
+    (game.debris = game.debris || []).push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, t: 0.6 + Math.random() * 0.4 });
+  }
+}
+
+function hitRock(i) {
+  const r = game.rocks[i];
+  game.rocks.splice(i, 1);
+  addScore(SIZES[r.size].pts);
+  explode(r.x, r.y, 4 + 3 * r.size);
+  if (r.size > 1) game.rocks.push(rock(r.size - 1, r.x, r.y), rock(r.size - 1, r.x, r.y));
+}
+
+function killShip() {
+  explode(game.ship.x, game.ship.y, 24);
+  game.ship = null; game.respawn = 2;
+  if (--game.lives <= 0) endGame();
+}
+
+function update(dt) {
+  const s = game.ship;
+  if (s) {
+    // MUGIC: roll = turn rate, pitch forward (down) = thrust, both proportional; keys at full strength
+    const roll = Mugic.connected && Math.abs(Mugic.roll) > DEADZONE ? Math.max(-1, Math.min(1, Mugic.roll / range)) : 0;
+    const fwd = Mugic.connected && -Mugic.pitch > DEADZONE ? Math.min(1, -Mugic.pitch / range) : 0;
+    const turn = keys.ArrowLeft ? -1 : keys.ArrowRight ? 1 : roll;
+    const thrust = keys.ArrowUp ? 1 : fwd;
+    s.a += turn * TURN_RATE * dt;
+    s.thrusting = thrust > 0;
+    s.vx += Math.cos(s.a) * THRUST * thrust * dt; s.vy += Math.sin(s.a) * THRUST * thrust * dt;
+    const k = Math.exp(-DRAG * dt); s.vx *= k; s.vy *= k;
+    const v = Math.hypot(s.vx, s.vy); if (v > MAX_SPEED) { s.vx *= MAX_SPEED / v; s.vy *= MAX_SPEED / v; }
+    s.x += s.vx * dt; s.y += s.vy * dt; wrap(s);
+    if (s.safe > 0) s.safe -= dt;
+
+    if (input.fire && game.shots.length < 4) {
+      game.shots.push({ x: s.x + Math.cos(s.a) * 14, y: s.y + Math.sin(s.a) * 14, vx: s.vx + Math.cos(s.a) * 520, vy: s.vy + Math.sin(s.a) * 520, t: 1.0 });
+    }
+    if (input.hyper) {                              // hyperspace: anywhere, with a small chance of not making it
+      s.x = Math.random() * W; s.y = TOP + Math.random() * (H - TOP); s.vx = s.vy = 0;
+      if (Math.random() < 0.1) killShip();
+    }
+  } else if (game.state === 'play' && (game.respawn -= dt) <= 0) {
+    // respawn once the middle of the screen is clear
+    const c = { x: W / 2, y: TOP + (H - TOP) / 2 };
+    if (game.rocks.every(r => dist(r, c) > SIZES[r.size].r + 80)) newShip();
+  }
+  input.fire = input.hyper = false;
+
+  for (const o of [...game.rocks, ...game.shots, ...game.ufoShots, ...(game.debris || [])]) { o.x += o.vx * dt; o.y += o.vy * dt; wrap(o); }
+  game.rocks.forEach(r => { r.rot += r.spin * dt; });
+  game.shots = game.shots.filter(b => (b.t -= dt) > 0);
+  game.ufoShots = game.ufoShots.filter(b => (b.t -= dt) > 0);
+  game.debris = (game.debris || []).filter(d => (d.t -= dt) > 0);
+
+  updateUfo(dt);
+
+  // shots vs rocks and the saucer
+  for (let i = game.shots.length - 1; i >= 0; --i) {
+    const b = game.shots[i];
+    const j = game.rocks.findIndex(r => dist(r, b) < SIZES[r.size].r);
+    if (j >= 0) { game.shots.splice(i, 1); hitRock(j); continue; }
+    if (game.ufo && dist(game.ufo, b) < game.ufo.r) {
+      game.shots.splice(i, 1); addScore(game.ufo.small ? 1000 : 200); explode(game.ufo.x, game.ufo.y, 16); game.ufo = null;
+    }
+  }
+  // ship vs rocks, saucer and saucer shots
+  const ship = game.ship;
+  if (ship && ship.safe <= 0) {
+    const j = game.rocks.findIndex(r => dist(r, ship) < SIZES[r.size].r + 8);
+    if (j >= 0) { hitRock(j); killShip(); }
+    else if ((game.ufo && dist(game.ufo, ship) < game.ufo.r + 8) || game.ufoShots.some(b => dist(b, ship) < 9)) killShip();
+  }
+  if (game.state === 'play' && !game.rocks.length && !game.ufo) nextWave();
+}
+
+// Saucers: the big one fires at random, the small one (after 10,000 points) aims at the ship.
+function updateUfo(dt) {
+  if (!game.ufo) {
+    if (game.state === 'play' && (game.ufoTimer -= dt) <= 0) {
+      const small = game.score >= 10000 && Math.random() < 0.6, left = Math.random() < 0.5;
+      game.ufo = { small, r: small ? 10 : 20, x: left ? 0 : W - 1, y: TOP + 40 + Math.random() * (H - TOP - 80),
+                   vx: (left ? 1 : -1) * (small ? 140 : 100), vy: 0, turn: 1, shoot: 1, life: W / (small ? 140 : 100) };
+      game.ufoTimer = Math.max(6, 18 - game.wave);
+    }
+    return;
+  }
+  const u = game.ufo;
+  u.x += u.vx * dt; u.y += u.vy * dt; wrap(u);
+  if ((u.turn -= dt) <= 0) { u.vy = (Math.random() - 0.5) * 160; u.turn = 1 + Math.random(); }
+  if ((u.shoot -= dt) <= 0 && game.ship) {
+    const a = u.small ? Math.atan2(game.ship.y - u.y, game.ship.x - u.x) + (Math.random() - 0.5) * 0.3 : Math.random() * Math.PI * 2;
+    game.ufoShots.push({ x: u.x, y: u.y, vx: Math.cos(a) * 300, vy: Math.sin(a) * 300, t: 1.2 });
+    u.shoot = u.small ? 0.9 : 1.3;
+  }
+  if ((u.life -= dt) <= 0) game.ufo = null;          // flew across and left
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicRocksHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'asteroids', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('asteroids').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'title' || game.state === 'over') newGame();
+  else input.fire = true;
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'Space') { input.fire = true; e.preventDefault(); }
+  if (e.code === 'KeyH') input.hyper = true;
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Drawing (vector style) ----------
+function poly(x, y, a, pts) {
+  ctx.beginPath();
+  pts.forEach(([px, py], i) => {
+    const X = x + px * Math.cos(a) - py * Math.sin(a), Y = y + px * Math.sin(a) + py * Math.cos(a);
+    i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y);
+  });
+  ctx.closePath(); ctx.stroke();
+}
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText(String(game.score).padStart(5, '0'), 12, 24);
+  ctx.textAlign = 'center'; ctx.fillText('HI ' + game.hi, W / 2, 24);
+  ctx.textAlign = 'right'; ctx.fillText('WAVE ' + game.wave + '   ' + '▲'.repeat(Math.max(0, game.lives)), W - 12, 24);
+  ctx.strokeStyle = '#2a3040'; ctx.beginPath(); ctx.moveTo(0, TOP); ctx.lineTo(W, TOP); ctx.stroke();
+
+  ctx.strokeStyle = '#e8f0ff'; ctx.lineWidth = 1.6; ctx.lineJoin = 'round';
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.font = '38px ui-monospace, Menlo, monospace'; ctx.fillText('SPACE ROCKS', W / 2, H / 2 - 10);
+    ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, H / 2 + 30);
+    return;
+  }
+  game.rocks.forEach(r => {
+    const R = SIZES[r.size].r;
+    poly(r.x, r.y, r.rot, r.shape.map((k, i) => { const a = i / r.shape.length * Math.PI * 2; return [Math.cos(a) * R * k, Math.sin(a) * R * k]; }));
+  });
+  const s = game.ship;
+  if (s && (s.safe <= 0 || Math.floor(s.safe * 8) % 2)) {
+    poly(s.x, s.y, s.a, [[14, 0], [-10, -9], [-6, 0], [-10, 9]]);
+    if (s.thrusting && Math.random() < 0.7) poly(s.x, s.y, s.a, [[-7, -4], [-16 - Math.random() * 6, 0], [-7, 4]]);
+  }
+  if (game.ufo) {
+    const u = game.ufo, k = u.r / 20;
+    poly(u.x, u.y, 0, [[-20 * k, 0], [-10 * k, -7 * k], [10 * k, -7 * k], [20 * k, 0], [10 * k, 7 * k], [-10 * k, 7 * k]]);
+    poly(u.x, u.y, 0, [[-8 * k, -7 * k], [-5 * k, -13 * k], [5 * k, -13 * k], [8 * k, -7 * k]]);
+  }
+  ctx.fillStyle = '#fff';
+  [...game.shots, ...game.ufoShots].forEach(b => ctx.fillRect(b.x - 1.5, b.y - 1.5, 3, 3));
+  (game.debris || []).forEach(d => ctx.fillRect(d.x, d.y, 2, 2));
+  if (game.state === 'over') {
+    ctx.textAlign = 'center'; ctx.font = '32px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', W / 2, H / 2);
+    ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', W / 2, H / 2 + 30);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

@@ -8,6 +8,7 @@ Browser games played with a MUGIC as the controller over Web Bluetooth. `index.h
 | Muncher (Pac-Man style) | `pacman/` | **Roll** → left/right, **pitch** → up/down, like a proportional joystick: the dominant axis picks the direction, its tilt the speed (`Full speed at`, default 15°; level = stop); early turns are taken at the next opening |
 | Wall Breaker (Breakout style) | `bricks/` | **Roll** → paddle speed, like Invaders (`Full speed at`, default 15°); **flick** launches; hit position on the paddle sets the angle |
 | Anteater (after Stern/Tago, 1982) | `anteater/` | **Roll** / **pitch** steer the tongue tip like a proportional joystick (dominant axis, tilt = speed); steering back along the tongue retracts it; **flick** snaps it back |
+| Space Rocks (Asteroids style) | `asteroids/` | **Roll** → turn rate, **pitch forward** → thrust (both proportional, `Full turn/thrust at`, default 15°); **flick** fires; hyperspace on H (keyboard) |
 | 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.

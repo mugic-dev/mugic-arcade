@@ -22,6 +22,7 @@
   <a href="pacman/"><h2>Muncher</h2><p>Pac-Man-style maze: roll and pitch steer like a joystick, tilt sets speed.</p></a>
   <a href="bricks/"><h2>Wall Breaker</h2><p>Roll steers the paddle like a joystick, flick launches the ball.</p></a>
   <a href="anteater/"><h2>Anteater</h2><p>Steer the tongue through the anthill with roll and pitch, flick to pull it back.</p></a>
+  <a href="asteroids/"><h2>Space Rocks</h2><p>Asteroids-style: roll to turn, tip forward to thrust, flick to fire.</p></a>
   <a href="sokoban/"><h2>倉庫番 Sōkoban</h2><p>Flick left/right/up/down to step and push crates, undo with a button.</p></a>
 </div>
 <div class="games">
@@ -29,6 +30,7 @@
   <div class="scores"><h3>MUNCHER — TOP 10</h3><div id="pacBoard"></div></div>
   <div class="scores"><h3>WALL BREAKER — TOP 10</h3><div id="brkBoard"></div></div>
   <div class="scores"><h3>ANTEATER — TOP 10</h3><div id="antBoard"></div></div>
+  <div class="scores"><h3>SPACE ROCKS — TOP 10</h3><div id="rockBoard"></div></div>
   <div class="scores"><h3>SŌKOBAN HARD — LEVEL RECORDS</h3><div id="sokBoard"></div></div>
 </div>
 <p class="help">Scores are posted with three initials and the code of the MUGIC that played (connected over Bluetooth).</p>
@@ -37,6 +39,7 @@ Scores.top('invaders').then(rows => Scores.render(document.getElementById('invBo
 Scores.top('pacman').then(rows => Scores.render(document.getElementById('pacBoard'), rows));
 Scores.top('bricks').then(rows => Scores.render(document.getElementById('brkBoard'), rows));
 Scores.top('anteater').then(rows => Scores.render(document.getElementById('antBoard'), rows));
+Scores.top('asteroids').then(rows => Scores.render(document.getElementById('rockBoard'), rows));
 // level records: best (fewest moves) per Sokoban level
 Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(l => Scores.top('sokoban', { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))
   .then(levels => Scores.render(document.getElementById('sokBoard'),
