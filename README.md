@@ -18,13 +18,13 @@ It is served by GitHub Pages straight from `main` (repo root): a push to `main` 
 | Star Swarm (Galaga style) | `galaga/` | **Roll** → fighter speed (like Invaders); **flick** fires (2 shots max) |
 | Bug Blaster (Centipede style) | `centipede/` | **Roll** / **pitch** → shooter velocity in the bottom zone (proportional joystick); automatic fire |
 | Snake | `snake/` | **Roll** / **pitch** past `Turn at` (8°) turns (dominant axis, 1.4× to switch); constant speed |
-| Road Hopper (Frogger style) | `frogger/` | One **flick** = one hop; direction = axis that turned most (**yaw** left/right, **pitch** up/down), snap-back ignored, as in Sōkoban |
+| Road Hopper (Frogger style) | `frogger/` | One **flick** = one hop; direction = axis that turned most (**yaw** left/right, **pitch** up/down), snap-back ignored, as in Warehouse |
 | Moon Lander (Lunar Lander) | `lander/` | **Roll** → turn rate, **pitch forward** → throttle (proportional); land on a pad upright and slow |
 | Grand Prix (Pole Position style) | `racer/` | **Roll** → steering (proportional), **pitch forward** → gas, **pitch back** → brake, **flick** shifts LO/HI. Auto-gear mode is practice only (not posted) |
 | Dragon Tower (Kung-Fu Master style) | `kungfu/` | **Roll** → walk speed; hold **pitch down** = crouch, **tip up** = jump; **flick** strikes (standing = punch, crouched = low kick, airborne = jump kick); when grabbed, 4 quick flicks shake them off. Keyboard play not posted |
 | Paper Toss | `toss/` | A throwing **flick** throws: **yaw** (just before) aims, **pitch** sets the arc (level 45° → tipped up 25° = 70° lob), **roll** puts curving spin on it, throw strength sets distance (`Full power at`; or `Power from: tilt`). Score = streak |
 | Rescue Chopper (Choplifter style) | `chopper/` | **Roll** → horizontal speed, **pitch** → climb/descend (proportional); roll level = hover, chopper faces you and shots drop as bombs; **flick** fires. Land gently near hostages, carry 16 home. Keyboard play not posted |
-| 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
+| Warehouse (Sokoban style) | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.
 
@@ -58,12 +58,12 @@ Create `<game>/index.html`, include `../common/arcade.css` and `../common/mugic.
 OSC float args used: `acc xyz` (0–2), `euler xyz` (3–5, degrees). As the BNO055 is mounted in the MUGIC (checked on
 a device): yaw = euler X, pitch = euler Y, roll = euler Z reversed — these are the defaults.
 
-Sokoban levels are original and were checked solvable with a BFS solver.
+Warehouse levels are original and were checked solvable with a BFS solver.
 
 ## Global scoreboard (Supabase)
 
 Scores are posted with three initials plus the MUGIC's device code (last 6 hex of its label MAC, read over
-Bluetooth from `GetConfiguration`), and only while a MUGIC is connected. Invaders: highest score. Sōkoban: Hard mode
+Bluetooth from `GetConfiguration`), and only while a MUGIC is connected. Invaders: highest score. Warehouse: Hard mode
 only, fewest moves per level. This is a page-side check — it stops casual fakes, not someone calling the API directly;
 device-signed scores (firmware challenge/response) are the planned follow-up.
 
