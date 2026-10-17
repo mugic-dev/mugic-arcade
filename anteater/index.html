@@ -17,7 +17,7 @@
   goes. Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
   over. Ants keep to their tunnel, mostly poking in from the edge and back out. Only the tip eats: an ant touching the
   tongue anywhere else bites. Eat worms from behind, never head-on.
-  The two queens (bottom tunnel) each clear every insect for a while; the spider comes out at night. Keyboard: arrows, space = retract.</p>
+  The two queens (bottom tunnel) each clear every insect for a while; the spider comes out at night. Keyboard (any time, for testing — that game isn't posted to the global board): arrows, space = retract, Enter = start.</p>
 
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
@@ -25,7 +25,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const DEADZONE = 2;
-const EXTEND_SPEED = 9, RETRACT_SPEED = 20;   // tiles/s: tongue at full tilt; flick snap-back (finite, ants can still bite)
+const EXTEND_SPEED = 7, RETRACT_SPEED = 20;   // tiles/s: tongue at full tilt; flick snap-back (finite, ants can still bite)
 let range = 15;
 try { range = +localStorage.getItem('mugicAnteaterRange') || 15; } catch (e) {}
 Mugic.mountPanel($('bar'), $('tuning'), {
@@ -61,7 +61,7 @@ try { game.hi = +localStorage.getItem('mugicAnteaterHi') || 0; } catch (e) {}
 const keys = { dir: null };
 const input = { retract: false };
 
-function newGame() { game.score = 0; game.lives = 3; game.level = 1; newLevel(); }
+function newGame() { game.score = 0; game.lives = 3; game.level = 1; game.keyboard = false; newLevel(); }
 
 function newLevel() {
   game.larvae = new Set([...open].filter(k => k !== key(...ENTRANCE)));
@@ -84,12 +84,20 @@ const inTongue = (x, y, skipTip) => game.tongue.some((t, i) => (!skipTip || i < 
 const night = () => game.clock > dayLength();
 const antSpeed = () => 2.2 + 0.25 * Math.min(game.level - 1, 8) + (night() ? 0.8 : 0);   // tiles/s
 
+// Held arrow keys override the MUGIC (and keep that game off the global board).
+// MUGIC: the dominant of roll/pitch picks the direction, with hysteresis so a diagonal tilt doesn't flicker.
+const SWITCH_RATIO = 1.4;
+let stickAxis = 'roll';
 function stick() {
-  if (!Mugic.connected) return keys.dir ? { dir: keys.dir, speed: 1 } : null;
+  if (keys.dir) { game.keyboard = true; return { dir: keys.dir, speed: 1 }; }
+  if (!Mugic.connected) return null;
   const r = Mugic.roll, p = Mugic.pitch, mag = Math.max(Math.abs(r), Math.abs(p));
   if (mag < DEADZONE) return null;
-  const dir = Math.abs(r) >= Math.abs(p) ? (r > 0 ? DIRS.right : DIRS.left) : (p > 0 ? DIRS.up : DIRS.down);
-  return { dir, speed: Math.min(1, mag / range) };
+  const other = stickAxis === 'roll' ? 'pitch' : 'roll';
+  if (Math.abs(Mugic[other]) > SWITCH_RATIO * Math.abs(Mugic[stickAxis])) stickAxis = other;
+  const v = Mugic[stickAxis];
+  const dir = stickAxis === 'roll' ? (v > 0 ? DIRS.right : DIRS.left) : (v > 0 ? DIRS.up : DIRS.down);
+  return { dir, speed: Math.min(1, Math.abs(v) / range) };
 }
 
 function die() { game.state = 'bitten'; game.timer = 1.5; }
@@ -157,12 +165,12 @@ function updateCritters(dt) {
   }
   if (game.calm > 0) game.calm -= dt;
   else {
-    if ((game.spawnAnt -= dt) <= 0 && game.ants.length < 3 + game.level) {
+    if ((game.spawnAnt -= dt) <= 0 && game.ants.length < 5 + game.level) {
       const a = spawnFromEdge([1, 4, 7, 10]);
       const depth = 3 + Math.floor(Math.random() * 10);
       a.turnAt = Math.random() < crossChance() ? null : a.dir[0] > 0 ? depth : COLS - 1 - depth;
       if (!inTongue(a.x, a.y)) game.ants.push(a);     // never appear on top of the tongue
-      game.spawnAnt = Math.max(0.8, 3 - 0.25 * game.level);
+      game.spawnAnt = Math.max(0.5, 1.6 - 0.15 * game.level);
     }
     if ((game.spawnWorm -= dt) <= 0 && game.worms.length < 2) {
       const w = spawnFromEdge([4, 7, 10]);
@@ -236,7 +244,7 @@ function update(dt) {
 function endGame() {
   game.state = 'over';
   if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicAnteaterHi', game.hi); } catch (e) {} }
-  if (game.score > 0) Scores.submit({ game: 'anteater', score: game.score }).then(showBoard);
+  if (game.score > 0 && !game.keyboard) Scores.submit({ game: 'anteater', score: game.score }).then(showBoard);
 }
 const showBoard = () => Scores.top('anteater').then(rows => Scores.render($('board'), rows));
 showBoard();
@@ -340,6 +348,10 @@ function draw() {
   if (msg) {
     ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, cy(5.5) - 8, cv.width, 40);
     ctx.fillStyle = msg[1]; ctx.fillText(msg[0], cv.width / 2, cy(5.5) + 18);
+  }
+  if (game.keyboard) {
+    ctx.fillStyle = '#ffb847'; ctx.font = '13px ui-monospace, Menlo, monospace';
+    ctx.fillText('KEYBOARD GAME — score not posted to the global board', cv.width / 2, 44);
   }
   if (game.calm > 0) { ctx.fillStyle = '#ffd24a'; ctx.font = '13px ui-monospace, Menlo, monospace'; ctx.fillText('QUEEN EATEN — ALL CLEAR', cv.width / 2, TOP + ROWS * T - 4); }
 }
