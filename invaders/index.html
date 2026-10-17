@@ -13,18 +13,19 @@
 <canvas id="game" width="640" height="560"></canvas>
 <div id="tuning"></div>
 <p class="help">Put the MUGIC in BLE output mode (firmware ≥ 2.2.0), click Connect (Chrome/Edge), hold it level and
-  click Calibrate center. Roll tilts the cannon left/right; a sharp flick (energy spike) fires. Enter starts / restarts.</p>
+  click Calibrate center. Roll steers like a joystick: the further you roll, the faster the cannon moves; a sharp flick (energy spike) fires. Enter starts / restarts.</p>
 
 <script src="../common/mugic.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const input = { fire: false };
 Mugic.onFlick = () => { input.fire = true; };
+const SPEED_MAX = 400, DEADZONE = 2;   // px/s at full roll; degrees of roll that still count as center
 let range = 15;
 try { range = +localStorage.getItem('mugicInvadersRange2') || 15; } catch (e) {}
 Mugic.mountPanel($('bar'), $('tuning'), {
   keys: '← → space',
-  extraRows: [['Range', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
 });
 $('rangeVal').textContent = '±' + range + '°';
 $('range').oninput = e => {
@@ -113,11 +114,9 @@ function update(dt) {
     input.fire = false;
     return;
   }
-  // ship: MUGIC roll maps to position; keyboard moves at fixed speed
-  if (Mugic.connected) {
-    const r = Math.max(-1, Math.min(1, Mugic.roll / range));
-    const target = W / 2 + r * (W / 2 - s.w / 2 - 10);
-    s.x += (target - s.x) * Math.min(1, dt * 12);
+  // ship: MUGIC roll is a proportional joystick, ±range degrees -> ±SPEED_MAX; keyboard moves at fixed speed
+  if (Mugic.connected && Math.abs(Mugic.roll) > DEADZONE) {
+    s.x += Math.max(-1, Math.min(1, Mugic.roll / range)) * SPEED_MAX * dt;
   }
   if (keys.ArrowLeft) s.x -= 300 * dt;
   if (keys.ArrowRight) s.x += 300 * dt;
