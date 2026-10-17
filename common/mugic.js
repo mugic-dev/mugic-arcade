@@ -133,13 +133,20 @@ const Mugic = (() => {
       ch.addEventListener('characteristicvaluechanged', onPacket);
       await ch.startNotifications();
       m.connected = true; devName = dev.name;
-      status('connected: ' + dev.name, true);
+      // The firmware names each device 'mu' + the last 6 hex digits of its label MAC (e.g. mubaf234); use that
+      // as the device code right away. A MAC in the diagnostics reply, when the firmware fills it, takes over.
+      const fromName = /^mu([0-9a-f]{6})$/i.exec(dev.name || '');
+      if (fromName) m.deviceCode = fromName[1].toLowerCase();
+      status(`connected: ${dev.name}` + (m.deviceCode ? ` (${m.deviceCode})` : ''), true);
       // ask for diagnostics (ConfigTaskCommand.get_diagnostics = field 7, empty) to learn the device code;
       // ask again a couple of times if no answer arrives
       const cfg = await (await server.getPrimaryService(SERVICE)).getCharacteristic(CONFIG_CHAR);
       cfg.addEventListener('characteristicvaluechanged', onConfig);
       await cfg.startNotifications();
-      for (let i = 0; i < 3 && !m.deviceCode && m.connected; ++i) {
+      let gotReply = false;
+      const onReply = () => { gotReply = true; };
+      cfg.addEventListener('characteristicvaluechanged', onReply);
+      for (let i = 0; i < 3 && !gotReply && m.connected; ++i) {
         await cfg.writeValue(new Uint8Array([0x3a, 0x00])).catch(err => console.warn('device code request failed', err));
         await new Promise(r => setTimeout(r, 1500));
       }
