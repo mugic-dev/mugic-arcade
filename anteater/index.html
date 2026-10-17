@@ -17,7 +17,7 @@
   goes. Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
   over. Ants keep to their tunnel, mostly poking in from the edge and back out. Only the tip eats: an ant touching the
   tongue anywhere else bites. Eat worms from behind, never head-on.
-  The two queens sit in the bottom tunnel: eating one clears every insect for a while (she's back 20 s later); the spider comes out at night. Keyboard (any time, for testing — that game isn't posted to the global board): arrows, hold space = retract (let go to stop), Enter = start. With the MUGIC, a flick starts the retract and another flick stops it.</p>
+  The two queens sit in the bottom tunnel: eating one clears every insect for a while (only two per anthill); the spider comes out at night. Keyboard (any time, for testing — that game isn't posted to the global board): arrows, hold space = retract (let go to stop), Enter = start. With the MUGIC, a flick starts the retract and another flick stops it.</p>
 
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
@@ -42,7 +42,7 @@ $('range').oninput = e => {
 // ---------- Anthill ----------
 // Horizontal tunnels joined by shafts; tunnel ends at the screen edges are where insects come and go.
 const COLS = 25, ROWS = 14, T = 24, SKY = 86, TOP = SKY + 30;
-const TUNNEL_ROWS = [1, 4, 7, 10, 13], QUEEN_SPOTS = [[5, 13], [19, 13]], QUEEN_BACK = 20;
+const TUNNEL_ROWS = [1, 4, 7, 10, 13], QUEEN_SPOTS = [[5, 13], [19, 13]];
 const SHAFTS = { 1: [2, 8, 16, 22], 4: [5, 12, 19], 7: [2, 9, 15, 22], 10: [6, 12, 18] };   // from row r down to the next tunnel
 const ENTRANCE = [12, 0];
 const open = new Set();
@@ -65,6 +65,7 @@ function newGame() { game.score = 0; game.lives = 3; game.level = 1; game.keyboa
 
 function newLevel() {
   game.larvae = new Set([...open].filter(k => k !== key(...ENTRANCE)));
+  game.queens = QUEEN_SPOTS.map(([x, y]) => ({ x, y }));   // static, two per anthill; eaten ones are gone for the level
   newDay();
 }
 
@@ -75,7 +76,6 @@ function newDay() {
   game.tongue = [ENTRANCE.slice()];
   game.stepAcc = 0; game.retracting = false;
   game.ants = []; game.worms = []; game.spider = null;
-  game.queens = QUEEN_SPOTS.map(([x, y]) => ({ x, y, away: 0 }));   // static; `away` counts down after one is eaten
   game.clock = 0; game.calm = 0; game.spawnAnt = 1; game.spawnWorm = 6;
   game.state = 'ready'; game.timer = 1.5;
 }
@@ -141,9 +141,9 @@ function eatAt(x, y) {
     if (hit > 0) { w.dead = true; game.score += 200; }
   }
   game.worms = game.worms.filter(w => !w.dead);
-  const q = game.queens.find(c => c.away <= 0 && c.x === x && c.y === y);
-  if (q) {
-    game.score += 1000; q.away = QUEEN_BACK;
+  const q = game.queens.findIndex(c => c.x === x && c.y === y);
+  if (q >= 0) {
+    game.score += 1000; game.queens.splice(q, 1);
     game.ants = []; game.worms = []; game.spider = null; game.calm = 6;
   }
 }
@@ -208,8 +208,6 @@ function updateCritters(dt) {
     }
   }
   game.worms = game.worms.filter(w => !w.gone);
-
-  game.queens.forEach(q => { if (q.away > 0) q.away -= dt; });
 
   const sp = game.spider;                             // the spider patrols the top tunnel
   if (sp) {
@@ -337,7 +335,7 @@ function draw() {
     w.body.forEach(([x, y], i) => { ctx.fillStyle = i === 0 ? '#ff9a3a' : '#e8b07a'; ctx.beginPath(); ctx.arc(cx(x), cy(y), i === 0 ? 8 : 7, 0, Math.PI * 2); ctx.fill(); });
     const [hx, hy] = w.body[0]; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx(hx) + w.dir[0] * 3, cy(hy) - 2, 1.8, 0, Math.PI * 2); ctx.fill();
   });
-  game.queens.forEach(q => { if (q.away <= 0) drawBug(cx(q.x), cy(q.y), '#ffd24a', 10, true); });
+  game.queens.forEach(q => drawBug(cx(q.x), cy(q.y), '#ffd24a', 10, true));
   if (game.spider) drawBug(cx(game.spider.x), cy(game.spider.y), '#b05cff', 10, true);
 
   ctx.textAlign = 'center'; ctx.font = '18px ui-monospace, Menlo, monospace';
