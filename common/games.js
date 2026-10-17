@@ -11,7 +11,7 @@ const GAMES = [
   { id: 'centipede', name: 'Bug Blaster', blurb: 'Centipede-style: roll and pitch steer the shooter, auto-fire.' },
   { id: 'snake', name: 'Snake', blurb: "Tilt to turn; eat, grow, don't bite yourself." },
   { id: 'frogger', name: 'Road Hopper', blurb: 'Frogger-style: each flick is a hop (yaw left/right, pitch up/down).' },
-  { id: 'lander', name: 'Moon Lander', blurb: 'Lunar Lander: roll to turn, tip forward to throttle, land softly.' },
+  { id: 'lander', name: 'Moon Lander', blurb: 'Lunar Lander-style: roll to turn, tip forward to throttle, land softly.' },
   { id: 'racer', name: 'Grand Prix', blurb: 'Pole Position-style: roll steers, pitch is gas/brake, flick shifts LO/HI.' },
   { id: 'kungfu', name: 'Dragon Tower', blurb: 'Kung-Fu Master-style: roll walks, tip down crouch / up jump, flick strikes, shake off grabbers.' },
   { id: 'toss', name: 'Paper Fling', blurb: 'Throw for real: point to aim, tip up to lob, twist for spin, throw harder to go further.', board: 'LONGEST STREAK' },
