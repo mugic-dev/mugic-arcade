@@ -7,13 +7,16 @@
 //                               change (degrees, signed) over the flick window, to tell which way it went
 //   Mugic.trigger(on)           hysteresis + cooldown edge detector (same as the flick) for game inputs
 //   Mugic.deviceCode            last 6 hex digits of the device's label MAC (e.g. 'baf234'), once read
+//   Mugic.battery / .batteryVolts  battery percent estimated from the voltage in each packet (as the plugin does
+//                               by default), and the voltage; null until a packet with a voltage arrives
 const Mugic = (() => {
   const SERVICE = 0x5501, CONFIG_CHAR = 0x113A, DATA_CHAR = 0x113B;
-  const ACC = 0;                         // OSC float args: acc xyz, euler xyz, gyro, mag, quat
+  // OSC float args: acc xyz, euler xyz, gyro, mag, quat, battery volts (the int soc before it is skipped)
+  const ACC = 0, BATT_VOLTS = 16;
   const STORE = 'mugicArcade';
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
-    connected: false, deviceCode: null, flicks: 0, lastFlickAt: -Infinity, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
+    connected: false, deviceCode: null, battery: null, batteryVolts: null, flicks: 0, lastFlickAt: -Infinity, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
     // as mounted in the MUGIC: euler X = yaw, Y = pitch, Z = roll (reversed)
     settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: false, invertYaw: false, thresh: 60 },
   };
@@ -66,6 +69,7 @@ const Mugic = (() => {
   function onPacket(e) {
     const f = parseOsc(e.target.value);
     if (f.length < 6) return;
+    if (f.length > BATT_VOLTS) battery(f[BATT_VOLTS]);
     const s = m.settings, ax = f[ACC], ay = f[ACC + 1], az = f[ACC + 2];
     raw = { energy: ax * ax + ay * ay + az * az };
     for (const a in AXES) {
@@ -114,20 +118,39 @@ const Mugic = (() => {
     return null;
   }
 
-  // ConfigTaskResponse.get_diagnostics_response (7) -> GetDiagnosticsResponse.mac_addr (12, the label MAC from NVS)
+  // ConfigTaskResponse.get_diagnostics_response (7) -> GetDiagnosticsResponse.mac_addr (12, the label MAC from NVS;
+  // empty on current firmware, so the BLE name is used meanwhile)
   function onConfig(e) {
     const resp = pbField(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength), 7);
     const mac = resp && pbField(resp, 12);
     if (!mac || mac.length < 6) return;
     m.deviceCode = String.fromCharCode(...mac).toLowerCase().replace(/[^0-9a-f]/g, '').slice(-6);
-    status(`connected: ${devName} (${m.deviceCode})`, true);
+    connStatus();
+  }
+
+  // Battery percent from voltage, as the MUGIC plug-in and Max app do (zmap 3.7 4.13 5 100): 3.7 V or less
+  // reads 5%, 4.13 V or more 100%. No voltage (0) yet shows "…".
+  function battery(volts) {
+    const pct = volts > 0 ? Math.round(5 + (Math.min(4.13, Math.max(3.7, volts)) - 3.7) / (4.13 - 3.7) * 95) : null;
+    const changed = pct !== m.battery || (volts > 0 && Math.abs(volts - (m.batteryVolts || 0)) >= 0.01);
+    m.battery = pct; m.batteryVolts = volts > 0 ? volts : null;
+    if (changed) connStatus();
+  }
+
+  function connStatus() {
+    if (!m.connected) return;
+    const code = m.deviceCode ? ` (${m.deviceCode})` : '';
+    const batt = m.battery == null ? ' · battery …' : ` · battery ≈${m.battery}% · ${m.batteryVolts.toFixed(2)} V`;
+    status(`connected: ${devName}${code}${batt}`, true);
   }
 
   m.connect = async () => {
     if (!navigator.bluetooth) { alert('This browser has no Web Bluetooth — use Chrome or Edge.'); return; }
     try {
       const dev = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: 'mu' }], optionalServices: [SERVICE] });
-      dev.addEventListener('gattserverdisconnected', () => { m.connected = false; m.deviceCode = null; status('disconnected', false); });
+      dev.addEventListener('gattserverdisconnected', () => {
+        m.connected = false; m.deviceCode = null; m.battery = m.batteryVolts = null; status('disconnected', false);
+      });
       const server = await dev.gatt.connect();
       const ch = await (await server.getPrimaryService(SERVICE)).getCharacteristic(DATA_CHAR);
       ch.addEventListener('characteristicvaluechanged', onPacket);
@@ -137,8 +160,8 @@ const Mugic = (() => {
       // as the device code right away. A MAC in the diagnostics reply, when the firmware fills it, takes over.
       const fromName = /^mu([0-9a-f]{6})$/i.exec(dev.name || '');
       if (fromName) m.deviceCode = fromName[1].toLowerCase();
-      status(`connected: ${dev.name}` + (m.deviceCode ? ` (${m.deviceCode})` : ''), true);
-      // ask for diagnostics (ConfigTaskCommand.get_diagnostics = field 7, empty) to learn the device code;
+      connStatus();
+      // ask for diagnostics (ConfigTaskCommand.get_diagnostics = field 7, empty) for the device code;
       // ask again a couple of times if no answer arrives
       const cfg = await (await server.getPrimaryService(SERVICE)).getCharacteristic(CONFIG_CHAR);
       cfg.addEventListener('characteristicvaluechanged', onConfig);
@@ -146,8 +169,9 @@ const Mugic = (() => {
       let gotReply = false;
       const onReply = () => { gotReply = true; };
       cfg.addEventListener('characteristicvaluechanged', onReply);
+      const askDiagnostics = () => cfg.writeValue(new Uint8Array([0x3a, 0x00])).catch(err => console.warn('device code request failed', err));
       for (let i = 0; i < 3 && !gotReply && m.connected; ++i) {
-        await cfg.writeValue(new Uint8Array([0x3a, 0x00])).catch(err => console.warn('device code request failed', err));
+        await askDiagnostics();
         await new Promise(r => setTimeout(r, 1500));
       }
       if (!m.deviceCode && m.connected) status(`connected: ${devName} (device code not read — scores can't be posted)`, true);
