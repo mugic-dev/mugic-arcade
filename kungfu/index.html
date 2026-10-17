@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Dragon Tower</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>DRAGON TOWER</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="360"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll walks left/right (the further, the faster).
+  Hold it tipped down to crouch, tip it up to jump. Flick to strike: standing = high punch, crouched = low kick,
+  in the air = jump kick. Grabbed? Shake the MUGIC (several quick flicks) to throw them off. Duck high knives, jump low
+  ones, small fighters only fall to a low kick. Beat the boss at the end of each floor.
+  Keyboard (practice, not posted): ← → walk, ↓ crouch, ↑ jump, X strike.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 3, WALK = 150;
+let range = 15, tilt = 12;
+try { range = +localStorage.getItem('mugicTowerRange') || 15; tilt = +localStorage.getItem('mugicTowerTilt') || 12; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → ↑ ↓ X',
+  axes: ['roll', 'pitch'],
+  extraRows: [
+    ['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal'],
+    ['Crouch/jump at', `<input type="range" id="tilt" min="5" max="40" value="${tilt}">`, 'tiltVal'],
+  ],
+});
+const slider = (id, key, set) => {
+  $(id + 'Val').textContent = '±' + $(id).value + '°';
+  $(id).oninput = e => { set(+e.target.value); $(id + 'Val').textContent = '±' + e.target.value + '°'; try { localStorage.setItem(key, e.target.value); } catch (e) {} };
+};
+slider('range', 'mugicTowerRange', v => range = v);
+slider('tilt', 'mugicTowerTilt', v => tilt = v);
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, GROUND = H - 50, LEN = 2600, FLOOR_TIME = 120;
+const GRAVITY = 1300, JUMP_V = 480, SHAKES = 4;
+const REACH = { punch: 46, kick: 52, jump: 50 };
+const ENEMY = {
+  gripper: { color: '#b07cff', speed: 85, hp: 1, pts: 100 },
+  tomtom:  { color: '#ff9f3a', speed: 120, hp: 1, pts: 200, small: true },   // only a low kick (or jump kick) hits it
+  thrower: { color: '#ff5050', speed: 70, hp: 2, pts: 500 },
+};
+
+const game = { state: 'title', score: 0, hi: 0 };
+try { game.hi = +localStorage.getItem('mugicTowerHi') || 0; } catch (e) {}
+const keys = {};
+
+function newGame() { Object.assign(game, { state: 'play', score: 0, lives: 3, floor: 1, keyboard: false }); startFloor(); }
+
+// odd floors run right-to-left, even floors left-to-right; the boss guards the far end
+function startFloor() {
+  const toEnd = game.floor % 2 ? -1 : 1;
+  game.toEnd = toEnd;
+  game.p = { x: toEnd < 0 ? LEN - 100 : 100, y: 0, vy: 0, face: toEnd, crouch: false, attack: null, atkT: 0, grabbed: 0, shakes: 0, hurt: 0, hp: 100 };
+  const bx = toEnd < 0 ? 90 : LEN - 90;
+  game.boss = { x: bx, hp: 6 + 2 * game.floor, state: 'idle', t: 0, height: 'high', flinch: 0, active: false };
+  Object.assign(game, { enemies: [], knives: [], pops: [], time: FLOOR_TIME, spawn: 1.5, dead: 0, clear: 0, banner: { text: `FLOOR ${(game.floor - 1) % 5 + 1}`, t: 2 } });
+  game.jumpArmed = true;
+}
+
+const tier = () => Math.min(game.floor, 8);
+
+// ---------- Update ----------
+function update(dt) {
+  game.pops = game.pops.filter(p => (p.t -= dt) > 0);
+  if (game.banner && (game.banner.t -= dt) <= 0) game.banner = null;
+  if (game.dead) { if ((game.dead -= dt) <= 0) { if (--game.lives <= 0) endGame(); else startFloor(); } return; }
+  if (game.clear) { if ((game.clear -= dt) <= 0) { ++game.floor; startFloor(); } return; }
+  if ((game.time -= dt) <= 0) { loseLife(); return; }
+
+  const p = game.p;
+  // controls
+  const kb = keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown;
+  if (kb) game.keyboard = true;
+  const roll = keys.ArrowLeft ? -range : keys.ArrowRight ? range : Mugic.connected ? Mugic.roll : 0;
+  const pitch = keys.ArrowUp ? tilt + 1 : keys.ArrowDown ? -tilt - 1 : Mugic.connected ? Mugic.pitch : 0;
+  const air = p.y < 0;
+  p.crouch = !air && pitch < -tilt;
+  if (pitch > tilt && game.jumpArmed && !air && !p.grabbed) { p.vy = -JUMP_V; game.jumpArmed = false; }
+  if (pitch < tilt / 2) game.jumpArmed = true;
+
+  if (!p.grabbed && !p.hurt && (!p.crouch || air)) {
+    const v = Math.abs(roll) > DEADZONE ? Math.max(-1, Math.min(1, roll / range)) * WALK : 0;
+    if (v) { p.x += v * dt; if (!p.attack) p.face = Math.sign(v); p.walk = (p.walk || 0) + Math.abs(v) * dt; }
+  }
+  // the boss blocks the way until beaten; the floor's start is a wall
+  const b = game.boss;
+  if (b.hp > 0) p.x = game.toEnd < 0 ? Math.max(b.x + 40, p.x) : Math.min(b.x - 40, p.x);
+  p.x = Math.max(20, Math.min(LEN - 20, p.x));
+  if (air || p.vy) { p.vy += GRAVITY * dt; p.y += p.vy * dt; if (p.y >= 0) { p.y = 0; p.vy = 0; } }
+  if (p.hurt) p.hurt = Math.max(0, p.hurt - dt);
+
+  // strike: active from 0.05 to 0.18 s of a 0.25 s move, one hit per strike
+  if (p.attack) {
+    p.atkT += dt;
+    if (p.atkT > 0.05 && p.atkT < 0.18 && !p.hitDone) strikeHits(p);
+    if (p.atkT >= 0.25) p.attack = null;
+  }
+
+  if (p.grabbed) p.hp -= 6 * p.grabbed * dt;
+  updateEnemies(dt); updateBoss(dt); updateKnives(dt);
+  if (p.hp <= 0) loseLife();
+
+  if (!b.active && b.hp > 0 && (game.spawn -= dt) <= 0) spawnEnemy();
+}
+
+function strike() {
+  const p = game.p;
+  if (p.grabbed) { if (++p.shakes >= SHAKES) shakeOff(); return; }
+  if (p.attack || p.hurt) return;
+  p.attack = p.y < 0 ? 'jump' : p.crouch ? 'kick' : 'punch'; p.atkT = 0; p.hitDone = false;
+}
+
+function shakeOff() {
+  const p = game.p;
+  for (const e of game.enemies) if (e.state === 'hold') { e.state = 'stun'; e.t = 0.8; e.x = p.x - e.side * 70; }
+  p.grabbed = 0; p.shakes = 0;
+}
+
+function strikeHits(p) {
+  const reach = REACH[p.attack], x0 = p.x + p.face * 8, x1 = p.x + p.face * (8 + reach);
+  const inReach = x => (x - x0) * p.face >= -6 && (x - x1) * p.face <= 12;
+  for (const e of game.enemies) {
+    if (e.dying || !inReach(e.x)) continue;
+    if (ENEMY[e.type].small && p.attack === 'punch') continue;     // punches go over the small fighters
+    p.hitDone = true;
+    if (--e.hp <= 0) { e.dying = 0.5; addScore(ENEMY[e.type].pts, e.x); if (e.state === 'hold') p.grabbed = Math.max(0, p.grabbed - 1); }
+    else e.x += p.face * 20;
+    return;
+  }
+  const b = game.boss;
+  if (b.hp > 0 && b.active && inReach(b.x)) {
+    p.hitDone = true; --b.hp; b.flinch = 0.25; b.state = 'rest'; b.t = 0.5; b.x += p.face * 10;
+    if (b.hp <= 0) { addScore(2000 * tier(), b.x); addScore(Math.ceil(game.time) * 20); game.clear = 2.5; game.banner = { text: 'FLOOR CLEAR', t: 2.5 }; }
+  }
+}
+
+function spawnEnemy() {
+  const p = game.p, alive = game.enemies.filter(e => !e.dying);
+  game.spawn = Math.max(0.6, 2.2 - 0.18 * tier()) * (0.6 + Math.random() * 0.8);
+  if (alive.length >= 3 + Math.floor(tier() / 2)) return;
+  const ahead = Math.random() < 0.6, side = ahead ? game.toEnd : -game.toEnd, x = p.x + side * (W / 2 + 30);
+  if (x < 0 || x > LEN) return;
+  const r = Math.random();
+  const type = r < 0.15 && !alive.some(e => e.type === 'thrower') ? 'thrower' : r < 0.15 + 0.08 * tier() ? 'tomtom' : 'gripper';
+  game.enemies.push({ type, x, hp: ENEMY[type].hp, state: 'walk', t: 0, throwT: 1, walk: 0 });
+}
+
+function updateEnemies(dt) {
+  const p = game.p;
+  for (const e of game.enemies) {
+    if (e.dying) { e.dying -= dt; e.x += Math.sign(e.x - p.x) * 120 * dt; continue; }
+    const d = p.x - e.x, dir = Math.sign(d) || 1, speed = ENEMY[e.type].speed * (1 + 0.06 * tier());
+    if (e.state === 'stun') { if ((e.t -= dt) <= 0) e.state = 'walk'; continue; }
+    if (e.state === 'hold') { e.x = p.x - e.side * 16; continue; }
+    if (e.type === 'thrower') {
+      if (Math.abs(d) > 210) { e.x += dir * speed * dt; e.walk += speed * dt; }
+      else if ((e.throwT -= dt) <= 0) {
+        e.throwT = Math.max(1.0, 1.9 - 0.1 * tier());
+        game.knives.push({ x: e.x + dir * 14, vx: dir * 230, height: Math.random() < 0.5 ? 'high' : 'low' });
+      }
+      continue;
+    }
+    if (Math.abs(d) > 16) { e.x += dir * speed * dt; e.walk += speed * dt; }
+    else if (!p.hurt && p.y > -30) { e.state = 'hold'; e.side = dir; ++p.grabbed; }
+  }
+  game.enemies = game.enemies.filter(e => !(e.dying && e.dying <= 0) && Math.abs(e.x - p.x) < W * 1.5);
+}
+
+function updateKnives(dt) {
+  const p = game.p;
+  game.knives = game.knives.filter(k => {
+    k.x += k.vx * dt;
+    if (Math.abs(k.x - p.x) < 10) {
+      const dodged = k.height === 'high' ? p.crouch : p.y < -18;
+      if (!dodged) { hurt(15, Math.sign(k.vx)); return false; }
+    }
+    return Math.abs(k.x - p.x) < W;
+  });
+}
+
+// boss: walks up to you, winds up a high or low swing (watch the stick), swings, rests
+function updateBoss(dt) {
+  const b = game.boss, p = game.p;
+  if (b.hp <= 0) return;
+  if (!b.active) { if (Math.abs(b.x - p.x) < 300) { b.active = true; game.banner = { text: 'BOSS', t: 1.5 }; } return; }
+  b.flinch = Math.max(0, b.flinch - dt);
+  const d = p.x - b.x, dir = Math.sign(d) || 1;
+  b.t -= dt;
+  if (b.state === 'idle' || b.state === 'rest') {
+    if (Math.abs(d) > 62) b.x += dir * 70 * dt;
+    else if (b.t <= 0) { b.state = 'windup'; b.t = Math.max(0.35, 0.6 - 0.03 * tier()); b.height = Math.random() < 0.5 ? 'high' : 'low'; }
+  } else if (b.state === 'windup' && b.t <= 0) { b.state = 'swing'; b.t = 0.15; b.hit = false; }
+  else if (b.state === 'swing') {
+    if (!b.hit && Math.abs(d) < 80) {
+      b.hit = true;
+      const dodged = b.height === 'high' ? p.crouch : p.y < -18;
+      if (!dodged) hurt(18, dir);
+    }
+    if (b.t <= 0) { b.state = 'rest'; b.t = Math.max(0.5, 1.1 - 0.06 * tier()); }
+  }
+  // stay on the floor's own side
+  b.x = Math.max(40, Math.min(LEN - 40, b.x));
+}
+
+function hurt(n, dir) {
+  const p = game.p;
+  p.hp -= n; p.hurt = 0.4; p.x += dir * 30;
+  if (p.grabbed) shakeOff();
+}
+
+function loseLife() { game.dead = 2; game.banner = { text: game.time <= 0 ? 'TIME UP' : 'KNOCKED OUT', t: 2 }; }
+function addScore(n, x) { game.score += n; if (x !== undefined) game.pops.push({ x, text: String(n), t: 0.8 }); }
+
+const ranked = () => !game.keyboard;
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicTowerHi', game.hi); } catch (e) {} }
+  if (game.score > 0 && ranked()) Scores.submit({ game: 'kungfu', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('kungfu').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state !== 'play') newGame(); else if (!game.dead && !game.clear) strike();
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'KeyX' && game.state === 'play' && !e.repeat) { game.keyboard = true; strike(); }
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+  if (e.code === 'Enter' && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Drawing ----------
+// a fighter from lines: o = { crouch, air, attack, walk, hold, scale }
+function fighter(x, gy, f, color, o = {}) {
+  const s = o.scale || 1;
+  const hip = gy - (o.crouch ? 18 : 30) * s, sh = gy - (o.crouch ? 40 : 56) * s, head = gy - (o.crouch ? 50 : 67) * s;
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 5 * s; ctx.lineCap = 'round';
+  const line = (x1, y1, x2, y2) => { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); };
+  ctx.beginPath(); ctx.arc(x, head, 7 * s, 0, Math.PI * 2); ctx.fill();
+  line(x, sh, x, hip);
+  const step = Math.sin((o.walk || 0) / 9) * 9 * s;
+  if (o.attack === 'kick') { line(x, hip, x + f * 40 * s, gy - 4 * s); line(x, hip, x - f * 10 * s, gy); }
+  else if (o.attack === 'jump') { line(x, hip, x + f * 36 * s, hip - 4 * s); line(x, hip, x - f * 6 * s, hip + 14 * s); }
+  else if (o.air) { line(x, hip, x + 8 * s, hip + 12 * s); line(x, hip, x - 8 * s, hip + 12 * s); }
+  else if (o.crouch) { line(x, hip, x + f * 14 * s, gy); line(x, hip, x - f * 12 * s, gy); }
+  else { line(x, hip, x + step, gy); line(x, hip, x - step, gy); }
+  if (o.attack === 'punch') { line(x, sh, x + f * 34 * s, sh); line(x, sh, x - f * 8 * s, sh + 14 * s); }
+  else if (o.hold) { line(x, sh, x + f * 16 * s, sh + 2 * s); line(x, sh, x + f * 14 * s, sh + 10 * s); }
+  else { line(x, sh, x + f * 10 * s, sh + 16 * s); line(x, sh, x - f * 8 * s, sh + 16 * s); }
+}
+
+function draw() {
+  ctx.fillStyle = '#1a0f0a'; ctx.fillRect(0, 0, W, H);
+  const p = game.p, cam = p ? Math.max(0, Math.min(LEN - W, p.x - W / 2)) : 0;
+  // temple: pillars and lanterns with parallax, a wooden floor
+  for (let i = -1; i < 9; ++i) {
+    const x = i * 110 - (cam * 0.5) % 110;
+    ctx.fillStyle = '#3a1d12'; ctx.fillRect(x, 40, 22, GROUND - 40);
+    ctx.fillStyle = '#ff5a3a'; ctx.beginPath(); ctx.ellipse(x + 66, 90, 9, 13, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = '#5a2e14'; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.strokeStyle = '#7a4420'; for (let x = -(cam % 60); x < W; x += 60) { ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x, H); ctx.stroke(); }
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 14px ui-monospace, Menlo, monospace'; ctx.textAlign = 'left';
+  ctx.fillText('SCORE ' + game.score, 10, 20); ctx.fillText('HI ' + game.hi, 160, 20);
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe14d'; ctx.font = 'bold 40px ui-monospace, Menlo, monospace'; ctx.fillText('DRAGON TOWER', W / 2, 140);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, 190);
+    fighter(W / 2, GROUND, 1, '#f4f4f4', { attack: 'punch' });
+    return;
+  }
+  ctx.fillText('FLOOR ' + ((game.floor - 1) % 5 + 1), 290, 20);
+  ctx.fillText('TIME ' + Math.ceil(game.time), 390, 20);
+  ctx.fillText('♥'.repeat(Math.max(0, game.lives)), 500, 20);
+  const bar = (x, label, v, color) => { ctx.fillStyle = '#fff'; ctx.fillText(label, x, 40); ctx.fillStyle = '#333'; ctx.fillRect(x + 50, 30, 100, 10); ctx.fillStyle = color; ctx.fillRect(x + 50, 30, Math.max(0, v) * 100, 10); };
+  bar(10, 'YOU', p.hp / 100, '#4dff88');
+  const b = game.boss;
+  if (b.active && b.hp > 0) bar(220, 'BOSS', b.hp / (6 + 2 * game.floor), '#ff5050');
+  if (p.grabbed) { ctx.fillStyle = '#ffe14d'; ctx.textAlign = 'center'; ctx.fillText(`SHAKE! ${p.shakes}/${SHAKES}`, W / 2, 70); ctx.textAlign = 'left'; }
+
+  const sx = x => x - cam;
+  // stairs at the far end
+  const sEnd = game.toEnd < 0 ? 0 : LEN;
+  ctx.fillStyle = '#7a4420'; for (let i = 0; i < 4; ++i) ctx.fillRect(sx(sEnd) - (game.toEnd < 0 ? 0 : 60) + (game.toEnd < 0 ? 0 : i * 15), GROUND - (i + 1) * 15, 60 - i * 15, 15);
+  if (b.hp > 0) {
+    const f = Math.sign(p.x - b.x) || 1, x = sx(b.x);
+    fighter(x, GROUND, f, b.flinch ? '#fff' : '#3fd877', { scale: 1.25, walk: b.x });
+    // the stick shows where the swing is coming: raised = high, lowered = low
+    const raise = b.state === 'windup', swing = b.state === 'swing';
+    const hy = GROUND - (b.height === 'high' ? 70 : 20);
+    ctx.strokeStyle = '#d8b070'; ctx.lineWidth = 4; ctx.beginPath();
+    if (swing) { ctx.moveTo(x, GROUND - 60); ctx.lineTo(x + f * 80, hy); }
+    else if (raise) { ctx.moveTo(x, GROUND - 60); ctx.lineTo(x - f * 10, b.height === 'high' ? GROUND - 120 : GROUND - 10); }
+    else { ctx.moveTo(x + f * 6, GROUND - 60); ctx.lineTo(x + f * 30, GROUND - 100); }
+    ctx.stroke();
+    if (raise) { ctx.fillStyle = '#ffe14d'; ctx.textAlign = 'center'; ctx.fillText(b.height === 'high' ? 'DUCK!' : 'JUMP!', x, GROUND - 130); ctx.textAlign = 'left'; }
+  }
+  for (const e of game.enemies) {
+    const k = ENEMY[e.type], f = Math.sign(p.x - e.x) || 1;
+    ctx.globalAlpha = e.dying ? Math.max(0, e.dying * 2) : 1;
+    fighter(sx(e.x), GROUND, f, e.state === 'stun' ? '#888' : k.color, { scale: k.small ? 0.6 : 1, walk: e.walk, hold: e.state === 'hold' });
+    if (e.type === 'thrower' && e.throwT < 0.3) { ctx.fillStyle = '#ddd'; ctx.fillRect(sx(e.x) + f * 10, GROUND - 60, 10, 3); }
+    ctx.globalAlpha = 1;
+  }
+  ctx.fillStyle = '#ddd'; for (const k of game.knives) ctx.fillRect(sx(k.x) - 7, GROUND - (k.height === 'high' ? 58 : 10), 14, 3);
+  if (!(game.dead && Math.floor(game.dead * 6) % 2) && !(p.hurt && Math.floor(p.hurt * 20) % 2))
+    fighter(sx(p.x), GROUND + p.y, p.face, '#f4f4f4', { crouch: p.crouch, air: p.y < 0, attack: p.attack, walk: p.walk });
+  ctx.fillStyle = '#ffe14d'; ctx.textAlign = 'center';
+  for (const q of game.pops) ctx.fillText(q.text, sx(q.x), GROUND - 90 - (0.8 - q.t) * 40);
+  if (game.banner) { ctx.font = 'bold 26px ui-monospace, Menlo, monospace'; ctx.fillText(game.banner.text, W / 2, 120); }
+  if (game.keyboard) { ctx.fillStyle = '#fff'; ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.fillText('KEYBOARD · NOT RANKED', W / 2, 56); }
+  if (game.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 130, W, 80);
+    ctx.fillStyle = '#ff5a5a'; ctx.font = 'bold 30px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', W / 2, 170);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', W / 2, 196);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
