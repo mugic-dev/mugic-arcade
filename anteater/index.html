@@ -16,7 +16,7 @@
 <p class="help">Steer the tongue's tip through the anthill: roll right/left, pitch up/down, the further you tilt the faster it
   goes. Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
   over. Only the tip eats: an ant touching the tongue anywhere else bites. Eat worms from behind, never head-on.
-  A queen (bottom tunnel) clears every insect for a while; the spider comes out at night. Keyboard: arrows, space = retract.</p>
+  The two queens (bottom tunnel) each clear every insect for a while; the spider comes out at night. Keyboard: arrows, space = retract.</p>
 
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
@@ -73,7 +73,7 @@ const NIGHT = 20;
 function newDay() {
   game.tongue = [ENTRANCE.slice()];
   game.stepAcc = 0; game.retracting = false;
-  game.ants = []; game.worms = []; game.queen = null; game.spider = null;
+  game.ants = []; game.worms = []; game.queens = []; game.spider = null;
   game.clock = 0; game.calm = 0; game.spawnAnt = 1; game.spawnWorm = 6; game.spawnQueen = 15;
   game.state = 'ready'; game.timer = 1.5;
 }
@@ -129,8 +129,9 @@ function eatAt(x, y) {
     if (hit > 0) { w.dead = true; game.score += 200; }
   }
   game.worms = game.worms.filter(w => !w.dead);
-  if (game.queen && game.queen.x === x && game.queen.y === y) {
-    game.score += 1000; game.queen = null;
+  const q = game.queens.findIndex(c => c.x === x && c.y === y);
+  if (q >= 0) {
+    game.score += 1000; game.queens.splice(q, 1);
     game.ants = []; game.worms = []; game.spider = null; game.calm = 6;
   }
 }
@@ -159,15 +160,17 @@ function updateCritters(dt) {
   if (game.calm > 0) game.calm -= dt;
   else {
     if ((game.spawnAnt -= dt) <= 0 && game.ants.length < 3 + game.level) {
-      game.ants.push(spawnFromEdge([1, 4, 7, 10])); game.spawnAnt = Math.max(0.8, 3 - 0.25 * game.level);
+      const a = spawnFromEdge([1, 4, 7, 10]);
+      if (!inTongue(a.x, a.y)) game.ants.push(a);     // never appear on top of the tongue
+      game.spawnAnt = Math.max(0.8, 3 - 0.25 * game.level);
     }
     if ((game.spawnWorm -= dt) <= 0 && game.worms.length < 2) {
       const w = spawnFromEdge([4, 7, 10]);
       game.worms.push({ dir: w.dir, acc: 0, body: [[w.x, w.y], [w.x - w.dir[0], w.y], [w.x - 2 * w.dir[0], w.y]] });
       game.spawnWorm = 10;
     }
-    if ((game.spawnQueen -= dt) <= 0 && !game.queen) {
-      game.queen = { ...spawnFromEdge([QUEEN_ROW]), acc: 0 }; game.spawnQueen = 20;
+    if ((game.spawnQueen -= dt) <= 0 && game.queens.length < 2) {   // up to two queens in the bottom tunnel
+      game.queens.push({ ...spawnFromEdge([QUEEN_ROW]), acc: 0 }); game.spawnQueen = 9;
     }
     if (night() && !game.spider) game.spider = { ...spawnFromEdge([1]), acc: 0 };
   }
@@ -198,18 +201,19 @@ function updateCritters(dt) {
   }
   game.worms = game.worms.filter(w => !w.gone);
 
-  for (const c of [game.queen, game.spider]) {
+  for (const c of [...game.queens, game.spider]) {
     if (!c) continue;
-    c.acc += (c === game.spider ? 3 : 1.4) * dt;
+    const queen = c !== game.spider;
+    c.acc += (queen ? 1.4 : 3) * dt;
     while (c.acc >= 1) {
       --c.acc; c.x += c.dir[0];
       if (c.x < 0 || c.x >= COLS) {
-        if (c === game.queen) { game.queen = null; break; }
+        if (queen) { game.queens = game.queens.filter(x => x !== c); break; }
         c.dir = [-c.dir[0], 0]; c.x += 2 * c.dir[0];    // the spider patrols the top tunnel
       }
       if (c === game.spider && inTongue(c.x, c.y)) { die(); return; }
       const [tx, ty] = tip();
-      if (c === game.queen && c.x === tx && c.y === ty) { eatAt(tx, ty); break; }
+      if (queen && c.x === tx && c.y === ty) { eatAt(tx, ty); break; }
     }
   }
 }
@@ -328,7 +332,7 @@ function draw() {
     w.body.forEach(([x, y], i) => { ctx.fillStyle = i === 0 ? '#ff9a3a' : '#e8b07a'; ctx.beginPath(); ctx.arc(cx(x), cy(y), i === 0 ? 8 : 7, 0, Math.PI * 2); ctx.fill(); });
     const [hx, hy] = w.body[0]; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx(hx) + w.dir[0] * 3, cy(hy) - 2, 1.8, 0, Math.PI * 2); ctx.fill();
   });
-  if (game.queen) drawBug(cx(game.queen.x), cy(game.queen.y), '#ffd24a', 10, true);
+  game.queens.forEach(q => drawBug(cx(q.x), cy(q.y), '#ffd24a', 10, true));
   if (game.spider) drawBug(cx(game.spider.x), cy(game.spider.y), '#b05cff', 10, true);
 
   ctx.textAlign = 'center'; ctx.font = '18px ui-monospace, Menlo, monospace';
