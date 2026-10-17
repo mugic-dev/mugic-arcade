@@ -70,8 +70,8 @@ function newLevel() {
   newDay();
 }
 
-const dayLength = () => Math.max(25, 60 - 5 * (game.level - 1));   // days get shorter; the spider comes out sooner
-const NIGHT = 20;
+const dayLength = () => Math.max(40, 100 - 8 * (game.level - 1));   // days get shorter; the spider comes out sooner
+const NIGHT = 30;
 
 function newDay() {
   game.tongue = [ENTRANCE.slice()];
