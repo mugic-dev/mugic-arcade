@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Anteater</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>ANTEATER</h1>
+<div id="bar"></div>
+<canvas id="game" width="600" height="452"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Steer the tongue's tip through the anthill: roll right/left, pitch up/down, the further you tilt the faster it
+  goes. Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
+  over. Only the tip eats: an ant touching the tongue anywhere else bites. Eat worms from behind, never head-on.
+  A queen (bottom tunnel) clears every insect for a while; the spider comes out at night. Keyboard: arrows, space = retract.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 2;
+let range = 15;
+try { range = +localStorage.getItem('mugicAnteaterRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows, space',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicAnteaterRange', range); } catch (e) {}
+};
+
+// ---------- Anthill ----------
+// Horizontal tunnels joined by shafts; tunnel ends at the screen edges are where insects come and go.
+const COLS = 25, ROWS = 14, T = 24, SKY = 86, TOP = SKY + 30;
+const TUNNEL_ROWS = [1, 4, 7, 10, 13], QUEEN_ROW = 13;
+const SHAFTS = { 1: [2, 8, 16, 22], 4: [5, 12, 19], 7: [2, 9, 15, 22], 10: [6, 12, 18] };   // from row r down to the next tunnel
+const ENTRANCE = [12, 0];
+const open = new Set();
+const key = (x, y) => y * COLS + x;
+TUNNEL_ROWS.forEach(r => { for (let x = 0; x < COLS; ++x) open.add(key(x, r)); });
+for (const [r, cols] of Object.entries(SHAFTS)) {
+  for (const x of cols) for (let y = +r + 1; y < +r + 3; ++y) open.add(key(x, y));
+}
+open.add(key(...ENTRANCE));
+const isOpen = (x, y) => x >= 0 && x < COLS && y >= 0 && y < ROWS && open.has(key(x, y));
+const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
+
+// ---------- Game state ----------
+const game = { state: 'title', score: 0, hi: 0, lives: 3, level: 1 };
+try { game.hi = +localStorage.getItem('mugicAnteaterHi') || 0; } catch (e) {}
+const keys = { dir: null };
+const input = { retract: false };
+
+function newGame() { game.score = 0; game.lives = 3; game.level = 1; newLevel(); }
+
+function newLevel() {
+  game.larvae = new Set([...open].filter(k => k !== key(...ENTRANCE)));
+  newDay();
+}
+
+const dayLength = () => Math.max(25, 60 - 5 * (game.level - 1));   // days get shorter; the spider comes out sooner
+const NIGHT = 20;
+
+function newDay() {
+  game.tongue = [ENTRANCE.slice()];
+  game.stepAcc = 0; game.retracting = false;
+  game.ants = []; game.worms = []; game.queen = null; game.spider = null;
+  game.clock = 0; game.calm = 0; game.spawnAnt = 1; game.spawnWorm = 6; game.spawnQueen = 15;
+  game.state = 'ready'; game.timer = 1.5;
+}
+
+const tip = () => game.tongue[game.tongue.length - 1];
+const inTongue = (x, y, skipTip) => game.tongue.some((t, i) => (!skipTip || i < game.tongue.length - 1) && t[0] === x && t[1] === y);
+const night = () => game.clock > dayLength();
+const antSpeed = () => 2.2 + 0.25 * Math.min(game.level - 1, 8) + (night() ? 0.8 : 0);   // tiles/s
+
+function stick() {
+  if (!Mugic.connected) return keys.dir ? { dir: keys.dir, speed: 1 } : null;
+  const r = Mugic.roll, p = Mugic.pitch, mag = Math.max(Math.abs(r), Math.abs(p));
+  if (mag < DEADZONE) return null;
+  const dir = Math.abs(r) >= Math.abs(p) ? (r > 0 ? DIRS.right : DIRS.left) : (p > 0 ? DIRS.up : DIRS.down);
+  return { dir, speed: Math.min(1, mag / range) };
+}
+
+function die() { game.state = 'bitten'; game.timer = 1.5; }
+
+// The tip moves one tile per step: back onto the previous segment retracts, into open tunnel extends.
+function stepTongue(dir) {
+  const [x, y] = tip(), nx = x + dir[0], ny = y + dir[1], prev = game.tongue[game.tongue.length - 2];
+  if (prev && prev[0] === nx && prev[1] === ny) { game.tongue.pop(); return; }
+  if (!isOpen(nx, ny) || inTongue(nx, ny)) return;
+  game.tongue.push([nx, ny]);
+  if (game.larvae.delete(key(nx, ny))) game.score += 10;
+  eatAt(nx, ny);
+}
+
+function updateTongue(dt) {
+  if (input.retract) { game.retracting = true; input.retract = false; }
+  if (game.retracting) {
+    game.stepAcc += 30 * dt;
+    while (game.stepAcc >= 1 && game.tongue.length > 1) { game.tongue.pop(); --game.stepAcc; }
+    if (game.tongue.length === 1) { game.retracting = false; game.stepAcc = 0; }
+    return;
+  }
+  const s = stick();
+  if (!s) { game.stepAcc = 0; return; }
+  game.stepAcc += s.speed * 9 * dt;
+  while (game.stepAcc >= 1) { stepTongue(s.dir); --game.stepAcc; }
+}
+
+// Whatever the tip lands on: ants and the queen are eaten, worms only from behind.
+function eatAt(x, y) {
+  game.ants = game.ants.filter(a => {
+    if (a.x !== x || a.y !== y) return true;
+    game.score += 100; return false;
+  });
+  for (const w of game.worms) {
+    const hit = w.body.findIndex(([bx, by]) => bx === x && by === y);
+    if (hit === 0) { die(); return; }
+    if (hit > 0) { w.dead = true; game.score += 200; }
+  }
+  game.worms = game.worms.filter(w => !w.dead);
+  if (game.queen && game.queen.x === x && game.queen.y === y) {
+    game.score += 1000; game.queen = null;
+    game.ants = []; game.worms = []; game.spider = null; game.calm = 6;
+  }
+}
+
+// An ant walks its tunnel; at a shaft it may turn into it; it leaves at the screen edge.
+function moveAnt(a) {
+  const options = Object.values(DIRS).filter(d => !(d[0] === -a.dir[0] && d[1] === -a.dir[1]) && (isOpen(a.x + d[0], a.y + d[1]) || offEdge(a.x + d[0], a.y + d[1])));
+  const vertical = options.filter(d => d[1] !== 0 && !(a.x === ENTRANCE[0] && a.y + d[1] === 0));
+  const straight = options.find(d => d[0] === a.dir[0] && d[1] === a.dir[1]);
+  a.dir = vertical.length && Math.random() < 0.35 ? vertical[Math.floor(Math.random() * vertical.length)]
+        : straight || options.filter(d => !(a.x === ENTRANCE[0] && a.y + d[1] === 0))[0] || [-a.dir[0], -a.dir[1]];
+  a.x += a.dir[0]; a.y += a.dir[1];
+}
+const offEdge = (x, y) => (x < 0 || x >= COLS) && TUNNEL_ROWS.includes(y);
+
+function spawnFromEdge(rows) {
+  const y = rows[Math.floor(Math.random() * rows.length)], left = Math.random() < 0.5;
+  return { x: left ? 0 : COLS - 1, y, dir: left ? DIRS.right : DIRS.left, acc: 0 };
+}
+
+function updateCritters(dt) {
+  game.clock += dt;
+  if (game.clock > dayLength() + NIGHT) {           // the night is over and larvae are left: a life is lost
+    die(); return;
+  }
+  if (game.calm > 0) game.calm -= dt;
+  else {
+    if ((game.spawnAnt -= dt) <= 0 && game.ants.length < 3 + game.level) {
+      game.ants.push(spawnFromEdge([1, 4, 7, 10])); game.spawnAnt = Math.max(0.8, 3 - 0.25 * game.level);
+    }
+    if ((game.spawnWorm -= dt) <= 0 && game.worms.length < 2) {
+      const w = spawnFromEdge([4, 7, 10]);
+      game.worms.push({ dir: w.dir, acc: 0, body: [[w.x, w.y], [w.x - w.dir[0], w.y], [w.x - 2 * w.dir[0], w.y]] });
+      game.spawnWorm = 10;
+    }
+    if ((game.spawnQueen -= dt) <= 0 && !game.queen) {
+      game.queen = { ...spawnFromEdge([QUEEN_ROW]), acc: 0 }; game.spawnQueen = 20;
+    }
+    if (night() && !game.spider) game.spider = { ...spawnFromEdge([1]), acc: 0 };
+  }
+
+  for (const a of game.ants) {
+    a.acc += antSpeed() * dt;
+    while (a.acc >= 1 && !a.gone) {
+      --a.acc; moveAnt(a);
+      if (!isOpen(a.x, a.y)) { a.gone = true; break; }
+      const [tx, ty] = tip();
+      if (a.x === tx && a.y === ty) { a.gone = true; game.score += 100; }
+      else if (inTongue(a.x, a.y, true)) { die(); return; }
+    }
+  }
+  game.ants = game.ants.filter(a => !a.gone);
+
+  for (const w of game.worms) {
+    w.acc += 1.6 * dt;
+    while (w.acc >= 1 && !w.gone) {
+      --w.acc;
+      const [hx, hy] = w.body[0], nx = hx + w.dir[0];
+      if (nx < -2 || nx > COLS + 1) { w.gone = true; break; }
+      if (inTongue(nx, hy, true)) { w.dir = [-w.dir[0], 0]; w.body.reverse(); continue; }   // bumps the tongue and turns
+      w.body.unshift([nx, hy]); w.body.pop();
+      const [tx, ty] = tip();
+      if (nx === tx && hy === ty) { die(); return; }    // head-on into the tip
+    }
+  }
+  game.worms = game.worms.filter(w => !w.gone);
+
+  for (const c of [game.queen, game.spider]) {
+    if (!c) continue;
+    c.acc += (c === game.spider ? 3 : 1.4) * dt;
+    while (c.acc >= 1) {
+      --c.acc; c.x += c.dir[0];
+      if (c.x < 0 || c.x >= COLS) {
+        if (c === game.queen) { game.queen = null; break; }
+        c.dir = [-c.dir[0], 0]; c.x += 2 * c.dir[0];    // the spider patrols the top tunnel
+      }
+      if (c === game.spider && inTongue(c.x, c.y)) { die(); return; }
+      const [tx, ty] = tip();
+      if (c === game.queen && c.x === tx && c.y === ty) { eatAt(tx, ty); break; }
+    }
+  }
+}
+
+function update(dt) {
+  if (game.state === 'ready') { if ((game.timer -= dt) <= 0) game.state = 'play'; return; }
+  if (game.state === 'bitten') {
+    if ((game.timer -= dt) > 0) return;
+    if (--game.lives <= 0) endGame(); else newDay();
+    return;
+  }
+  if (game.state === 'clear') { if ((game.timer -= dt) <= 0) { ++game.level; newLevel(); } return; }
+  if (game.state !== 'play') return;
+  updateTongue(dt);
+  if (game.state !== 'play') return;
+  updateCritters(dt);
+  if (game.state === 'play' && !game.larvae.size) { game.state = 'clear'; game.timer = 2; game.score += 500 * game.level; }
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicAnteaterHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'anteater', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('anteater').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'title' || game.state === 'over') newGame();
+  else input.retract = true;
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
+  if (d) { keys.dir = DIRS[d]; e.preventDefault(); }
+  if (e.code === 'Space') { input.retract = true; e.preventDefault(); }
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+addEventListener('keyup', e => {
+  const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
+  if (d && keys.dir === DIRS[d]) keys.dir = null;
+});
+
+// ---------- Drawing ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const cx = x => x * T + T / 2, cy = y => TOP + y * T + T / 2;
+
+function drawSky() {
+  const isNight = game.state !== 'title' && night();
+  ctx.fillStyle = isNight ? '#0b1030' : '#5aa9e6'; ctx.fillRect(0, 30, cv.width, SKY);
+  if (game.state !== 'title') {
+    // the sun crosses the sky during the day, the moon at night
+    const f = isNight ? (game.clock - dayLength()) / NIGHT : game.clock / dayLength();
+    const sx = 20 + Math.min(1, f) * (cv.width - 40), sy = 30 + SKY - 18 - Math.sin(Math.min(1, f) * Math.PI) * (SKY - 40);
+    ctx.fillStyle = isNight ? '#e8e8ff' : '#ffe14d';
+    ctx.beginPath(); ctx.arc(sx, sy, 10, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.fillStyle = '#4c9a2a'; ctx.fillRect(0, TOP - 8, cv.width, 8);
+  // the anteater, snout down into the entrance
+  const ax = cx(ENTRANCE[0]);
+  ctx.fillStyle = '#8b5a2b';
+  ctx.beginPath(); ctx.ellipse(ax + 40, TOP - 26, 42, 16, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(ax + 6, TOP - 30); ctx.lineTo(ax - 4, TOP - 6); ctx.lineTo(ax + 6, TOP - 6); ctx.lineTo(ax + 18, TOP - 26); ctx.fill();
+  ctx.fillRect(ax + 18, TOP - 14, 8, 10); ctx.fillRect(ax + 56, TOP - 14, 8, 10);
+  ctx.beginPath(); ctx.moveTo(ax + 80, TOP - 30); ctx.quadraticCurveTo(ax + 110, TOP - 60, ax + 96, TOP - 20); ctx.fill();
+  ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(ax + 16, TOP - 28, 2, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawAnthill() {
+  ctx.fillStyle = '#6b3f1d'; ctx.fillRect(0, TOP, cv.width, ROWS * T);
+  ctx.fillStyle = '#1b0f06';
+  open.forEach(k => { const x = k % COLS, y = Math.floor(k / COLS); ctx.fillRect(x * T, TOP + y * T, T, T); });
+  ctx.fillStyle = '#fff3c4';
+  game.larvae.forEach(k => {
+    const x = k % COLS, y = Math.floor(k / COLS);
+    ctx.beginPath(); ctx.ellipse(cx(x), cy(y), 4, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+  });
+}
+
+function drawBug(x, y, color, size, legs) {
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let i = -1; i <= 1; ++i) { ctx.moveTo(x + i * size * 0.5, y); ctx.lineTo(x + i * size * 0.7, y - size); ctx.moveTo(x + i * size * 0.5, y); ctx.lineTo(x + i * size * 0.7, y + size); }
+  if (legs) ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x - size * 0.6, y, size * 0.45, 0, Math.PI * 2); ctx.arc(x + size * 0.1, y, size * 0.35, 0, Math.PI * 2); ctx.arc(x + size * 0.7, y, size * 0.4, 0, Math.PI * 2); ctx.fill();
+}
+
+function drawTongue() {
+  ctx.strokeStyle = '#ff6fa8'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath(); ctx.moveTo(cx(ENTRANCE[0]) - 2, TOP - 8);
+  game.tongue.forEach(([x, y]) => ctx.lineTo(cx(x), cy(y)));
+  ctx.stroke();
+  const [tx, ty] = tip();
+  ctx.fillStyle = '#ff2f7a'; ctx.beginPath(); ctx.arc(cx(tx), cy(ty), 6, 0, Math.PI * 2); ctx.fill();
+}
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText('SCORE ' + game.score, 10, 21);
+  ctx.textAlign = 'center'; ctx.fillText('HI ' + game.hi, cv.width / 2, 21);
+  ctx.textAlign = 'right'; ctx.fillText('LV ' + game.level + '  LIVES ' + Math.max(0, game.lives), cv.width - 10, 21);
+  drawSky();
+  if (game.state === 'title') {
+    ctx.fillStyle = '#6b3f1d'; ctx.fillRect(0, TOP, cv.width, ROWS * T);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe14d'; ctx.font = '34px ui-monospace, Menlo, monospace';
+    ctx.fillText('ANTEATER', cv.width / 2, TOP + 140);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', cv.width / 2, TOP + 180);
+    return;
+  }
+  drawAnthill();
+  drawTongue();
+  game.ants.forEach(a => drawBug(cx(a.x), cy(a.y), '#e8402a', 7, true));
+  game.worms.forEach(w => {
+    w.body.forEach(([x, y], i) => { ctx.fillStyle = i === 0 ? '#ff9a3a' : '#e8b07a'; ctx.beginPath(); ctx.arc(cx(x), cy(y), i === 0 ? 8 : 7, 0, Math.PI * 2); ctx.fill(); });
+    const [hx, hy] = w.body[0]; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx(hx) + w.dir[0] * 3, cy(hy) - 2, 1.8, 0, Math.PI * 2); ctx.fill();
+  });
+  if (game.queen) drawBug(cx(game.queen.x), cy(game.queen.y), '#ffd24a', 10, true);
+  if (game.spider) drawBug(cx(game.spider.x), cy(game.spider.y), '#b05cff', 10, true);
+
+  ctx.textAlign = 'center'; ctx.font = '18px ui-monospace, Menlo, monospace';
+  const msg = { ready: ['READY!', '#ffe14d'], bitten: ['OUCH!', '#ff5a5a'], clear: ['ANTHILL CLEARED!', '#4dff88'], over: ['GAME OVER', '#ff5a5a'] }[game.state];
+  if (msg) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, cy(5.5) - 8, cv.width, 40);
+    ctx.fillStyle = msg[1]; ctx.fillText(msg[0], cv.width / 2, cy(5.5) + 18);
+  }
+  if (game.calm > 0) { ctx.fillStyle = '#ffd24a'; ctx.font = '13px ui-monospace, Menlo, monospace'; ctx.fillText('QUEEN EATEN — ALL CLEAR', cv.width / 2, TOP + ROWS * T - 4); }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
