@@ -3,6 +3,8 @@
 //   Mugic.roll / .pitch / .yaw  degrees from the calibrated pose
 //   Mugic.energy                |acc|^2 minus the at-rest baseline
 //   Mugic.onFlick               called once per energy spike above settings.thresh
+//   Mugic.onFlickDir(d)         called ~150 ms after a flick with d = {roll, pitch, yaw}: the largest angle
+//                               change (degrees, signed) over the flick window, to tell which way it went
 //   Mugic.trigger(on)           hysteresis + cooldown edge detector (same as the flick) for game inputs
 const Mugic = (() => {
   const SERVICE = 0x5501, DATA_CHAR = 0x113B;
@@ -10,10 +12,12 @@ const Mugic = (() => {
   const STORE = 'mugicArcade';
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
-    connected: false, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null,
+    connected: false, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
     settings: { rollAxis: 4, pitchAxis: 5, yawAxis: 3, invertRoll: false, invertPitch: false, invertYaw: false, thresh: 60 },
   };
   let raw = null, zero = { roll: 0, pitch: 0, yaw: 0, energy: 0 };
+  const FLICK_BEFORE = 100, FLICK_AFTER = 150;   // ms of motion around the energy spike that give its direction
+  let history = [];                               // recent { t, roll, pitch, yaw }
   try { Object.assign(m.settings, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
   const save = () => { try { localStorage.setItem(STORE, JSON.stringify(m.settings)); } catch (e) {} };
   const cap = a => a[0].toUpperCase() + a.slice(1);
@@ -60,7 +64,27 @@ const Mugic = (() => {
       m[a] = wrap(raw[a] - zero[a]) * (s['invert' + cap(a)] ? -1 : 1);
     }
     m.energy = Math.abs(raw.energy - zero.energy);
-    if (flick(m.energy, performance.now()) && m.onFlick) m.onFlick();
+    const now = performance.now();
+    history.push({ t: now, roll: m.roll, pitch: m.pitch, yaw: m.yaw });
+    history = history.filter(h => now - h.t < 500);
+    if (flick(m.energy, now)) {
+      if (m.onFlick) m.onFlick();
+      if (m.onFlickDir) setTimeout(() => m.onFlickDir(flickDelta(now)), FLICK_AFTER);
+    }
+  }
+
+  // Largest signed change of each angle from just before the flick, over the flick window.
+  function flickDelta(t0) {
+    const win = history.filter(h => h.t >= t0 - FLICK_BEFORE && h.t <= t0 + FLICK_AFTER);
+    const d = { roll: 0, pitch: 0, yaw: 0 };
+    if (!win.length) return d;
+    for (const a in d) {
+      for (const h of win) {
+        const v = wrap(h[a] - win[0][a]);
+        if (Math.abs(v) > Math.abs(d[a])) d[a] = v;
+      }
+    }
+    return d;
   }
 
   m.calibrate = () => { if (raw) zero = { ...raw }; };

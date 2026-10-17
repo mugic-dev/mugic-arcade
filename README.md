@@ -5,7 +5,7 @@ Browser games played with a MUGIC as the controller over Web Bluetooth. `index.h
 | Game | Folder | Controls |
 |---|---|---|
 | Invaders | `invaders/` | **Roll** → cannon position (`Range` = degrees for full travel); **flick** fires |
-| 倉庫番 Sōkoban | `sokoban/` | **Yaw** → left/right, **pitch** → up/down: one step per impulse to ±`Step at` (30°); **flick** undoes |
+| 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down, **roll** (twist) → undo. `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.
 
@@ -33,6 +33,7 @@ Create `<game>/index.html`, include `../common/arcade.css` and `../common/mugic.
 - `Mugic.mountPanel(barEl, tuneEl, { axes, keys, extraRows })` — connect/calibrate bar and live meters
 - `Mugic.roll`, `.pitch`, `.yaw` (degrees from center), `.energy` (`ax²+ay²+az²` minus the rest baseline, as in `udp_socket.py`)
 - `Mugic.onFlick` — called once per energy spike
+- `Mugic.onFlickDir(d)` — ~150 ms after a flick, `d = {roll, pitch, yaw}`: largest signed angle change during it
 - `Mugic.trigger(() => threshold)` — the same hysteresis (re-arm under half) + 250 ms cooldown edge detector, for your own inputs
 
 OSC float args used: `acc xyz` (0–2), `euler xyz` (3–5, degrees). The BNO055 orders euler as heading, roll, pitch,
