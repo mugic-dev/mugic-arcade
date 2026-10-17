@@ -5,7 +5,7 @@ Browser games played with a MUGIC as the controller over Web Bluetooth. `index.h
 | Game | Folder | Controls |
 |---|---|---|
 | Invaders | `invaders/` | **Roll** → cannon speed, like a proportional joystick (`Full speed at` = roll for max speed, default 15°); **flick** fires |
-| 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down, **roll** (twist) → undo. `Min turn` sets how far it must turn; the snap back to center is ignored |
+| 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart are on-screen buttons (U/R). `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.
 
@@ -37,6 +37,6 @@ Create `<game>/index.html`, include `../common/arcade.css` and `../common/mugic.
 - `Mugic.trigger(() => threshold)` — the same hysteresis (re-arm under half) + 250 ms cooldown edge detector, for your own inputs
 
 OSC float args used: `acc xyz` (0–2), `euler xyz` (3–5, degrees). As the BNO055 is mounted in the MUGIC (checked on
-a device): yaw = euler X, pitch = euler Y reversed, roll = euler Z reversed — these are the defaults.
+a device): yaw = euler X, pitch = euler Y, roll = euler Z reversed — these are the defaults.
 
 Sokoban levels are original and were checked solvable with a BFS solver.

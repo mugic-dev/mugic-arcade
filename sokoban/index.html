@@ -11,9 +11,10 @@
 <h1>倉庫番 SŌKOBAN</h1>
 <div id="bar"></div>
 <canvas id="game" width="640" height="560"></canvas>
+<div class="mg-bar" style="margin: 8px 0 0"><button id="undoBtn">Undo (U)</button><button id="restartBtn">Restart (R)</button></div>
 <div id="tuning"></div>
 <p class="help">Click Connect, then Calibrate center. Each flick is one step: flick left/right (yaw) or up/down (pitch).
-  A twist flick (roll) undoes the last move; any flick goes to the next level once solved. Tune “Flick at” on the energy
+  Undo / Restart are the buttons under the board; any flick goes to the next level once solved. Tune “Flick at” on the energy
   meter and “Min turn” (how much the flick must turn to count).
   Keyboard: arrows move, U undo, R restart, N / P next / previous level.</p>
 
@@ -83,7 +84,7 @@ const save = () => { try { localStorage.setItem(STORE, JSON.stringify(saved)); }
 
 Mugic.mountPanel($('bar'), $('tuning'), {
   keys: 'arrows, U undo, R restart',
-  axes: ['yaw', 'pitch', 'roll'],
+  axes: ['yaw', 'pitch'],
   extraRows: [['Min turn', `<input type="range" id="minTurn" min="2" max="30" value="${saved.minTurn}">`, 'minTurnVal']],
 });
 $('minTurnVal').textContent = saved.minTurn + '°';
@@ -150,21 +151,23 @@ function undo() {
   game.state = 'play';
 }
 
+$('undoBtn').onclick = undo;
+$('restartBtn').onclick = () => loadLevel(game.n);
+
 function gotoLevel(n) { if (n >= 0 && n < LEVELS.length) loadLevel(n); }
 
 function next() { if (game.n + 1 < LEVELS.length) loadLevel(game.n + 1); else game.state = 'done'; }
 
-// A flick's direction is the axis that turned most during it: yaw -> left/right, pitch -> up/down, roll -> undo.
+// A flick's direction is the axis that turned most during it: yaw -> left/right, pitch -> up/down.
 Mugic.onFlickDir = d => {
   if (game.state === 'won') { next(); return; }
   if (game.state !== 'play') return;
-  const [axis, v] = Object.entries(d).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
+  const [axis, v] = [['yaw', d.yaw], ['pitch', d.pitch]].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
   if (Math.abs(v) < saved.minTurn) return;
   // the snap back to center after a flick is a jolt the other way: ignore it
   const now = performance.now(), last = game.lastFlick;
   if (last && last.axis === axis && Math.sign(last.v) !== Math.sign(v) && now - last.t < 600) return;
-  if (axis === 'roll') undo();
-  else move(axis === 'yaw' ? (v > 0 ? 'right' : 'left') : (v > 0 ? 'up' : 'down'));
+  move(axis === 'yaw' ? (v > 0 ? 'right' : 'left') : (v > 0 ? 'up' : 'down'));
   game.lastFlick = { axis, v, t: now };
 };
 

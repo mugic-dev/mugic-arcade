@@ -13,13 +13,13 @@ const Mugic = (() => {
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
     connected: false, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
-    // as mounted in the MUGIC: euler X = yaw, Y = pitch (reversed), Z = roll (reversed)
-    settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: true, invertYaw: false, thresh: 60 },
+    // as mounted in the MUGIC: euler X = yaw, Y = pitch, Z = roll (reversed)
+    settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: false, invertYaw: false, thresh: 60 },
   };
   let raw = null, zero = { roll: 0, pitch: 0, yaw: 0, energy: 0 };
   const FLICK_BEFORE = 100, FLICK_AFTER = 150;   // ms of motion around the energy spike that give its direction
   let history = [];                               // recent { t, roll, pitch, yaw }
-  const AXIS_VERSION = 3;                         // bump when the default axes change, to drop stale saved ones
+  const AXIS_VERSION = 4;                         // bump when the default axes change, to drop stale saved ones
   try {
     const saved = JSON.parse(localStorage.getItem(STORE) || '{}');
     if (saved.axisVersion !== AXIS_VERSION) {
