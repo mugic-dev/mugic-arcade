@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Paper Toss</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>PAPER TOSS</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="420"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10 — LONGEST STREAK</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, point the MUGIC at the bin and click Calibrate center. Aim by pointing left/right (yaw: the dotted
+  line on the floor follows), then make a throwing flick: the harder the throw, the further the paper flies. Watch the
+  wind. One miss ends the streak, and after a few baskets the bin starts to move. If throw strength is hard to control,
+  switch "Power from" to tilt: the paper then goes further the more you tip the MUGIC up as you throw.
+  Keyboard (practice, not posted): ← → aim, hold space to charge, release to throw.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const opts = { full: 600, source: 'throw' };
+try { Object.assign(opts, JSON.parse(localStorage.getItem('mugicTossOpts')) || {}); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem('mugicTossOpts', JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → space',
+  axes: ['yaw', 'pitch'],
+  extraRows: [
+    ['Power from', `<select id="source"><option value="throw">throw strength</option><option value="tilt">tilt up</option></select>`, 'sourceVal'],
+    ['Full power at', `<input type="range" id="full" min="100" max="3000" step="50" value="${opts.full}">`, 'fullVal'],
+  ],
+});
+$('source').value = opts.source;
+$('source').onchange = e => { opts.source = e.target.value; saveOpts(); };
+$('fullVal').textContent = opts.full;
+$('full').oninput = e => { opts.full = +e.target.value; $('fullVal').textContent = opts.full; saveOpts(); };
+
+// ---------- World (meters; x right, y up, z away from the thrower) ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const CAM = { y: 1.5, z: -2.0 }, F = 560, HORIZON = H * 0.42;
+const GRAVITY = 9.8, START = { x: 0, y: 1.3, z: 0 }, ELEV = 60 * Math.PI / 180, V_MIN = 5, V_MAX = 10.5;
+const RIM_H = 0.55, RIM_R = 0.25, BALL_R = 0.06, WIND_PUSH = 0.45;   // paper is light: wind accelerates it
+const AIM_GAIN = 0.5, AIM_MAX = 30, TILT_FULL = 35;                 // throw degrees per yaw degree; tilt (deg) for full power
+
+const proj = (x, y, z) => { const d = z - CAM.z; return { x: W / 2 + x / d * F, y: HORIZON - (y - CAM.y) / d * F, s: F / d }; };
+
+const game = { state: 'title', streak: 0, hi: 0 };
+try { game.hi = +localStorage.getItem('mugicTossHi') || 0; } catch (e) {}
+const keys = {}, history = [];
+let charge = null, keyAim = 0;
+
+function newGame() { Object.assign(game, { state: 'aim', streak: 0, keyboard: false, last: null }); setupThrow(); }
+
+function setupThrow() {
+  const n = game.streak;
+  const wmax = n < 2 ? 0 : Math.min(4, 0.6 + 0.3 * n);
+  Object.assign(game, { state: 'aim', ball: null, result: null,
+    wind: Math.round((Math.random() * 2 - 1) * wmax * 10) / 10,
+    bin: { x0: (Math.random() - 0.5) * Math.min(2, 0.2 * n), z: 3 + Math.min(4, 0.3 * n) + Math.random(), x: 0, t: 0,
+           amp: n < 6 ? 0 : Math.min(1.4, 0.3 + 0.1 * (n - 6)), speed: 0.7 + 0.05 * Math.max(0, n - 6) } });
+  game.bin.x = game.bin.x0;
+}
+
+// aim = where the MUGIC pointed just before the throw (the swing itself turns the wrist)
+const aimNow = () => Math.max(-AIM_MAX, Math.min(AIM_MAX, (Mugic.connected ? Mugic.yaw : 0) * AIM_GAIN + keyAim));
+function aimBefore(ms) {
+  const t = performance.now() - ms, h = history.find(s => s.t >= t) || history[history.length - 1];
+  return h || { aim: aimNow(), pitch: Mugic.pitch };
+}
+
+function throwBall(power, aimDeg) {
+  const v = V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power)), a = aimDeg * Math.PI / 180;
+  game.ball = { ...START, vx: v * Math.cos(ELEV) * Math.sin(a), vy: v * Math.sin(ELEV), vz: v * Math.cos(ELEV) * Math.cos(a), spin: 0, bounced: false };
+  game.last = { power, aim: aimDeg };
+  game.state = 'flight';
+}
+
+// A flick throws; power is the peak energy over the next 160 ms (or the tilt just before the throw).
+let measuring = null;
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'title' || game.state === 'over') { newGame(); return; }
+  if (game.state !== 'aim' || measuring) return;
+  const before = aimBefore(250);
+  measuring = { peak: Mugic.energy, until: performance.now() + 160, aim: before.aim, pitch: before.pitch };
+};
+
+function update(dt) {
+  const now = performance.now();
+  history.push({ t: now, aim: aimNow(), pitch: Mugic.pitch });
+  while (history.length && history[0].t < now - 1000) history.shift();
+  if (keys.ArrowLeft) keyAim = Math.max(-AIM_MAX, keyAim - 30 * dt);
+  if (keys.ArrowRight) keyAim = Math.min(AIM_MAX, keyAim + 30 * dt);
+  if (charge !== null) charge = Math.min(1, charge + dt / 1.2);
+
+  if (measuring) {
+    measuring.peak = Math.max(measuring.peak, Mugic.energy);
+    if (now >= measuring.until) {
+      const m = measuring; measuring = null;
+      const power = opts.source === 'tilt' ? m.pitch / TILT_FULL : (m.peak - Mugic.settings.thresh) / (opts.full - Mugic.settings.thresh);
+      throwBall(power, m.aim);
+      game.last.peak = Math.round(m.peak);
+    }
+  }
+
+  const b = game.bin;
+  b.t += dt;
+  b.x = b.x0 + b.amp * Math.sin(b.t * b.speed * 2);
+
+  const ball = game.ball;
+  if (game.state === 'flight' && ball) {
+    // a few substeps so the rim can't be skipped
+    for (let i = 0; i < 4 && game.state === 'flight'; ++i) flight(ball, dt / 4);
+  }
+  if (game.result && (game.result.t -= dt) <= 0) {
+    if (game.result.in) setupThrow(); else endGame();
+  }
+}
+
+function flight(p, dt) {
+  const y0 = p.y;
+  p.vx += game.wind * WIND_PUSH * dt; p.vy -= GRAVITY * dt;
+  p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.spin += dt * 8;
+  const b = game.bin, d = Math.hypot(p.x - b.x, p.z - b.z);
+  if (y0 >= RIM_H && p.y < RIM_H) {                       // passing down through the rim's plane
+    if (d < RIM_R - BALL_R * 0.5) { done(true); return; }
+    if (d < RIM_R + BALL_R && !p.bounced) {               // clipped the rim: bounce off, outward
+      const nx = (p.x - b.x) / d, nz = (p.z - b.z) / d, dot = p.vx * nx + p.vz * nz;
+      p.vx = (p.vx - 2 * Math.min(0, dot) * nx) * 0.5; p.vz = (p.vz - 2 * Math.min(0, dot) * nz) * 0.5; p.vy = Math.abs(p.vy) * 0.35;
+      p.y = RIM_H; p.bounced = true;
+      return;
+    }
+  }
+  if (p.y < RIM_H && d < RIM_R + BALL_R && p.y > 0) { p.vx *= -0.3; p.vz *= -0.3; }   // bounced off the side of the bin
+  if (p.y <= BALL_R) { p.y = BALL_R; done(false); }
+}
+
+function done(made) {
+  game.state = 'result';
+  if (made) ++game.streak;
+  game.result = { in: made, t: made ? 1.1 : 1.6, text: made ? (game.ball.bounced ? 'OFF THE RIM… IN!' : 'IN!') : 'MISS' };
+}
+
+const ranked = () => !game.keyboard;
+function endGame() {
+  game.state = 'over';
+  if (game.streak > game.hi) { game.hi = game.streak; try { localStorage.setItem('mugicTossHi', game.hi); } catch (e) {} }
+  if (game.streak > 0 && ranked()) Scores.submit({ game: 'toss', score: game.streak }).then(showBoard);
+}
+const showBoard = () => Scores.top('toss').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (game.state === 'title' || game.state === 'over') { newGame(); game.keyboard = true; }
+    else if (game.state === 'aim' && charge === null && !e.repeat) charge = 0;
+  }
+  if (e.code.startsWith('Arrow')) { e.preventDefault(); if (game.state === 'aim') game.keyboard = true; }
+});
+addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (e.code === 'Space' && charge !== null) {
+    if (game.state === 'aim') { game.keyboard = true; throwBall(charge, aimNow()); }
+    charge = null;
+  }
+});
+
+// ---------- Drawing ----------
+function draw() {
+  ctx.fillStyle = '#d9cdb4'; ctx.fillRect(0, 0, W, H);                           // wall
+  const fl = proj(0, 0, 14).y;
+  ctx.fillStyle = '#5b6e7a'; ctx.fillRect(0, fl, W, H - fl);                     // carpet
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+  for (let z = 0; z <= 14; z += 1) { const a = proj(-6, 0, z), b = proj(6, 0, z); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  for (let x = -6; x <= 6; x += 1) { const a = proj(x, 0, -1), b = proj(x, 0, 14); ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
+  // window on the wall
+  ctx.fillStyle = '#9fd0ff'; ctx.fillRect(W * 0.62, fl - 150, 150, 90); ctx.strokeStyle = '#fff'; ctx.lineWidth = 4; ctx.strokeRect(W * 0.62, fl - 150, 150, 90);
+
+  ctx.textAlign = 'left'; ctx.fillStyle = '#222'; ctx.font = 'bold 16px ui-monospace, Menlo, monospace';
+  ctx.fillText('STREAK ' + game.streak, 12, 26); ctx.fillText('BEST ' + game.hi, 12, 48);
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.font = 'bold 40px ui-monospace, Menlo, monospace'; ctx.fillText('PAPER TOSS', W / 2, 150);
+    ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS SPACE', W / 2, 190);
+    return;
+  }
+
+  // wind: arrow and speed
+  ctx.textAlign = 'center'; ctx.font = 'bold 15px ui-monospace, Menlo, monospace';
+  ctx.fillText(game.wind ? `WIND ${Math.abs(game.wind).toFixed(1)}` : 'NO WIND', W / 2, 26);
+  if (game.wind) {
+    const len = 20 + Math.abs(game.wind) * 14, s = Math.sign(game.wind);
+    ctx.strokeStyle = '#1f5fbf'; ctx.fillStyle = '#1f5fbf'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(W / 2 - s * len / 2, 42); ctx.lineTo(W / 2 + s * len / 2, 42); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W / 2 + s * (len / 2 + 8), 42); ctx.lineTo(W / 2 + s * len / 2, 34); ctx.lineTo(W / 2 + s * len / 2, 50); ctx.fill();
+  }
+
+  // aim guide on the floor
+  if (game.state === 'aim') {
+    const a = (measuring ? measuring.aim : aimNow()) * Math.PI / 180;
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    for (let r = 0.6; r < 3.2; r += 0.25) { const q = proj(Math.sin(a) * r, 0, Math.cos(a) * r); ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(1.5, q.s * 0.025), 0, Math.PI * 2); ctx.fill(); }
+  }
+
+  const ball = game.ball, b = game.bin;
+  const drawBall = () => {
+    if (!ball) return;
+    const sh = proj(ball.x, 0, ball.z), q = proj(ball.x, ball.y, ball.z), r = BALL_R * q.s;
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(sh.x, sh.y, r, r * 0.35, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#f7f7f2'; ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#999'; ctx.lineWidth = 1;
+    for (let i = 0; i < 3; ++i) { const t = ball.spin + i * 2.1; ctx.beginPath(); ctx.moveTo(q.x + Math.cos(t) * r * 0.8, q.y + Math.sin(t) * r * 0.8); ctx.lineTo(q.x - Math.cos(t + 0.7) * r * 0.5, q.y - Math.sin(t + 0.7) * r * 0.5); ctx.stroke(); }
+  };
+  const drawBin = () => {
+    const top = proj(b.x, RIM_H, b.z), bot = proj(b.x, 0, b.z), tw = RIM_R * top.s, bw = RIM_R * 0.8 * bot.s;
+    const ry = Math.max(2, (proj(b.x, RIM_H, b.z - RIM_R).y - proj(b.x, RIM_H, b.z + RIM_R).y) / 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(bot.x, bot.y, bw * 1.2, ry * 0.8, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#7a8a96'; ctx.beginPath(); ctx.moveTo(top.x - tw, top.y); ctx.lineTo(top.x + tw, top.y); ctx.lineTo(bot.x + bw, bot.y); ctx.lineTo(bot.x - bw, bot.y); ctx.fill();
+    ctx.fillStyle = '#2b3036'; ctx.beginPath(); ctx.ellipse(top.x, top.y, tw, ry, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#c7d0d6'; ctx.lineWidth = 3; ctx.stroke();
+  };
+  // painter's order: whatever is further away first
+  if (ball && ball.z > b.z) { drawBall(); drawBin(); } else { drawBin(); drawBall(); }
+
+  if (measuring || (charge !== null && game.state === 'aim')) {
+    ctx.fillStyle = '#222'; ctx.fillRect(W / 2 - 80, H - 34, 160, 14);
+    ctx.fillStyle = '#ff9f3a'; ctx.fillRect(W / 2 - 80, H - 34, 160 * (charge ?? 0), 14);
+  }
+  ctx.textAlign = 'right'; ctx.fillStyle = '#222'; ctx.font = '12px ui-monospace, Menlo, monospace';
+  if (game.last) ctx.fillText(`last throw: power ${Math.round(Math.max(0, Math.min(1, game.last.power)) * 100)}%` + (game.last.peak ? ` (energy ${game.last.peak})` : ''), W - 12, 26);
+  if (game.keyboard) ctx.fillText('KEYBOARD · NOT RANKED', W - 12, 44);
+  ctx.textAlign = 'center';
+  if (game.result) { ctx.fillStyle = game.result.in ? '#1a8f3a' : '#c0392b'; ctx.font = 'bold 34px ui-monospace, Menlo, monospace'; ctx.fillText(game.result.text, W / 2, 110); }
+  if (game.state === 'over') {
+    ctx.fillStyle = '#222'; ctx.font = 'bold 22px ui-monospace, Menlo, monospace'; ctx.fillText(`STREAK ${game.streak}`, W / 2, 150);
+    ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or space to play again', W / 2, 174);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state !== 'title' && game.state !== 'over' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
