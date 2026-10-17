@@ -1,0 +1,21 @@
+:root { --bg: #05060a; --fg: #e8f0ff; --dim: #7a8499; --acc: #4dff88; --warn: #ff5a5a; --panel: #11141c; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 ui-monospace, Menlo, monospace;
+       display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 12px 16px; }
+h1 { margin: 4px 0 10px; font-size: 20px; letter-spacing: 3px; color: var(--acc); }
+a { color: var(--acc); }
+.back { align-self: flex-start; color: var(--dim); text-decoration: none; }
+button, select, input { font: inherit; background: var(--panel); color: var(--fg); border: 1px solid #2a3040; border-radius: 4px; padding: 5px 9px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--acc); }
+canvas { background: #000; border: 1px solid #1d2230; max-width: 100%; height: auto; image-rendering: pixelated; }
+.help { color: var(--dim); margin-top: 8px; text-align: center; max-width: 640px; }
+
+.mg-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; margin-bottom: 10px; }
+#mgStatus { color: var(--dim); }
+#mgStatus.ok { color: var(--acc); }
+.mg-tuning { display: grid; grid-template-columns: auto 1fr auto; gap: 4px 10px; align-items: center;
+             width: min(640px, 100%); margin-top: 10px; background: var(--panel); padding: 10px; border-radius: 6px; }
+.mg-meter { height: 10px; background: #222838; position: relative; border-radius: 3px; overflow: hidden; }
+.mg-meter > i { position: absolute; top: 0; bottom: 0; background: var(--acc); }
+.mg-meter > b { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--warn); }

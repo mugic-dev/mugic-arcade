@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Sokoban</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>倉庫番 SŌKOBAN</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="560"></canvas>
+<div id="tuning"></div>
+<p class="help">Point the MUGIC straight ahead and click Calibrate center. Turn it left/right (yaw) or tip it up/down (pitch)
+  to the “Step at” angle for one step, then come back toward center for the next. A flick undoes the last move
+  (or goes to the next level once solved).
+  Keyboard: arrows move, U undo, R restart, N / P next / previous level.</p>
+
+<script src="../common/mugic.js"></script>
+<script>
+// Level format (XSB): # wall, space floor, . goal, $ box, * box on goal, @ player, + player on goal.
+// All levels checked solvable with a BFS solver.
+const LEVELS = [
+`#######
+#. $ @#
+#######`,
+`  ####
+###  #
+#. $@#
+#  $ #
+#. ###
+####`,
+`#######
+#     #
+# $.$ #
+# .@. #
+# $.$ #
+#     #
+#######`,
+`######
+#    #
+# #$ #
+# .$.#
+#  @ #
+######`,
+`########
+#      #
+# $ $  #
+## #.# #
+ # . @ #
+ #######`,
+` #######
+ #  .  #
+ # $#$ #
+##  .  #
+#  #$# #
+# .@   #
+########`,
+`#########
+#   #   #
+# $ . $ #
+#.##$##.#
+#   @   #
+#  ###  #
+#########`,
+`  #####
+###   #
+#.@$  #
+### $.#
+#.##$ #
+# # . ##
+#$ *$$.#
+#   .  #
+########`,
+];
+
+const $ = id => document.getElementById(id);
+const STORE = 'mugicSokoban';
+let saved = { best: {}, tilt: 30 };
+try { Object.assign(saved, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(saved)); } catch (e) {} };
+
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows, U undo, R restart',
+  axes: ['yaw', 'pitch'],
+  extraRows: [['Step at', `<input type="range" id="tilt" min="8" max="45" value="${saved.tilt}">`, 'tiltVal']],
+});
+$('tiltVal').textContent = saved.tilt + '°';
+$('tilt').oninput = e => { saved.tilt = +e.target.value; $('tiltVal').textContent = saved.tilt + '°'; save(); };
+
+// ---------- Game state ----------
+const game = {};
+
+function loadLevel(n) {
+  const rows = LEVELS[n].split('\n');
+  const W = Math.max(...rows.map(r => r.length)), H = rows.length;
+  Object.assign(game, { n, W, H, walls: new Set(), goals: new Set(), boxes: new Set(), floor: new Set(),
+                        history: [], moves: 0, pushes: 0, state: 'play' });
+  rows.forEach((r, y) => [...r.padEnd(W)].forEach((c, x) => {
+    const i = y * W + x;
+    if (c === '#') game.walls.add(i);
+    if ('.*+'.includes(c)) game.goals.add(i);
+    if ('$*'.includes(c)) game.boxes.add(i);
+    if ('@+'.includes(c)) game.player = i;
+  }));
+  // floor = cells reachable from the player without crossing walls (so outside stays dark)
+  const stack = [game.player];
+  while (stack.length) {
+    const i = stack.pop();
+    if (game.floor.has(i) || game.walls.has(i) || i < 0 || i >= W * H) continue;
+    game.floor.add(i);
+    const x = i % W;
+    if (x > 0) stack.push(i - 1);
+    if (x < W - 1) stack.push(i + 1);
+    stack.push(i - W, i + W);
+  }
+}
+
+const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
+
+function move(dir) {
+  if (game.state !== 'play') return;
+  const [dx, dy] = DIRS[dir];
+  const x = game.player % game.W, y = Math.floor(game.player / game.W);
+  const step = (cx, cy) => (cx < 0 || cy < 0 || cx >= game.W || cy >= game.H) ? -1 : cy * game.W + cx;
+  const t = step(x + dx, y + dy);
+  if (t < 0 || game.walls.has(t)) return;
+  let pushed = null;
+  if (game.boxes.has(t)) {
+    const t2 = step(x + 2 * dx, y + 2 * dy);
+    if (t2 < 0 || game.walls.has(t2) || game.boxes.has(t2)) return;
+    game.boxes.delete(t); game.boxes.add(t2); pushed = [t, t2]; ++game.pushes;
+  }
+  game.history.push({ player: game.player, pushed });
+  game.player = t; ++game.moves;
+  game.facing = dir;
+  if ([...game.boxes].every(b => game.goals.has(b))) {
+    game.state = 'won';
+    const best = saved.best[game.n];
+    if (!best || game.moves < best) { saved.best[game.n] = game.moves; save(); }
+  }
+}
+
+function undo() {
+  const h = game.history.pop();
+  if (!h) return;
+  game.player = h.player; --game.moves;
+  if (h.pushed) { game.boxes.delete(h.pushed[1]); game.boxes.add(h.pushed[0]); --game.pushes; }
+  game.state = 'play';
+}
+
+function gotoLevel(n) { if (n >= 0 && n < LEVELS.length) loadLevel(n); }
+
+function next() { if (game.n + 1 < LEVELS.length) loadLevel(game.n + 1); else game.state = 'done'; }
+
+Mugic.onFlick = () => { if (game.state === 'play') undo(); else if (game.state === 'won') next(); };
+
+addEventListener('keydown', e => {
+  const k = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+              KeyA: 'left', KeyD: 'right', KeyW: 'up', KeyS: 'down' }[e.code];
+  if (k) { move(k); e.preventDefault(); }
+  else if (e.code === 'KeyU' || e.code === 'KeyZ' || e.code === 'Backspace') undo();
+  else if (e.code === 'KeyR') loadLevel(game.n);
+  else if (e.code === 'KeyN' || e.code === 'PageDown') gotoLevel(game.n + 1);
+  else if (e.code === 'KeyP' || e.code === 'PageUp') gotoLevel(game.n - 1);
+  else if (e.code === 'Enter' && game.state === 'won') next();
+});
+
+// ---------- MUGIC yaw/pitch -> steps ----------
+// Impulse, like the flick: reaching ±"Step at" degrees takes one step; coming back under half of it
+// (hysteresis) and the cooldown re-arm it. Holding the tilt does not repeat.
+const step = Mugic.trigger(() => saved.tilt);
+
+function tiltDir() {
+  const y = Mugic.yaw, p = Mugic.pitch;
+  if (Math.max(Math.abs(y), Math.abs(p)) < saved.tilt) return null;
+  return Math.abs(y) >= Math.abs(p) ? (y > 0 ? 'right' : 'left') : (p > 0 ? 'up' : 'down');
+}
+
+function updateTilt(now) {
+  if (Mugic.connected && step(Math.max(Math.abs(Mugic.yaw), Math.abs(Mugic.pitch)), now)) move(tiltDir());
+}
+
+// ---------- Drawing ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const CW = cv.width, CH = cv.height, TOP = 44;
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, CW, CH);
+  const T = Math.min(56, Math.floor(Math.min(CW / game.W, (CH - TOP - 10) / game.H)));
+  const ox = Math.floor((CW - T * game.W) / 2), oy = TOP + Math.floor((CH - TOP - T * game.H) / 2);
+  const at = i => [ox + (i % game.W) * T, oy + Math.floor(i / game.W) * T];
+
+  game.floor.forEach(i => { const [x, y] = at(i); ctx.fillStyle = '#1a1d26'; ctx.fillRect(x, y, T, T); });
+  game.walls.forEach(i => {
+    const [x, y] = at(i);
+    ctx.fillStyle = '#7a3b2e'; ctx.fillRect(x, y, T, T);
+    ctx.fillStyle = '#4a2219';                    // mortar lines
+    for (let r = 1; r < 3; ++r) ctx.fillRect(x, y + r * T / 3 - 1, T, 2);
+    for (let r = 0; r < 3; ++r) { const off = r % 2 ? T / 2 : 0; ctx.fillRect(x + off + T / 4, y + r * T / 3, 2, T / 3); }
+  });
+  game.goals.forEach(i => {
+    const [x, y] = at(i);
+    ctx.fillStyle = '#ffdd55'; ctx.beginPath(); ctx.arc(x + T / 2, y + T / 2, T / 7, 0, Math.PI * 2); ctx.fill();
+  });
+  game.boxes.forEach(i => {
+    const [x, y] = at(i), on = game.goals.has(i), m = T * 0.08;
+    ctx.fillStyle = on ? '#3fbf6a' : '#c8843a'; ctx.fillRect(x + m, y + m, T - 2 * m, T - 2 * m);
+    ctx.strokeStyle = on ? '#1f6b3a' : '#7a4a1a'; ctx.lineWidth = Math.max(2, T / 14);
+    ctx.strokeRect(x + m * 2, y + m * 2, T - 4 * m, T - 4 * m);
+    ctx.beginPath(); ctx.moveTo(x + m * 2, y + m * 2); ctx.lineTo(x + T - m * 2, y + T - m * 2);
+    ctx.moveTo(x + T - m * 2, y + m * 2); ctx.lineTo(x + m * 2, y + T - m * 2); ctx.stroke();
+  });
+  // player: warehouse keeper with a cap facing the last move direction
+  const [px, py] = at(game.player), cx = px + T / 2, cy = py + T / 2;
+  ctx.fillStyle = '#6bc8ff'; ctx.beginPath(); ctx.arc(cx, cy, T * 0.34, 0, Math.PI * 2); ctx.fill();
+  const [fx, fy] = DIRS[game.facing || 'down'];
+  ctx.fillStyle = '#e8f0ff'; ctx.beginPath(); ctx.arc(cx + fx * T * 0.14, cy + fy * T * 0.14, T * 0.12, 0, Math.PI * 2); ctx.fill();
+
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText(`LEVEL ${game.n + 1}/${LEVELS.length}`, 12, 26);
+  ctx.textAlign = 'center'; ctx.fillText(`MOVES ${game.moves}   PUSHES ${game.pushes}`, CW / 2, 26);
+  const best = saved.best[game.n];
+  ctx.textAlign = 'right'; ctx.fillText(best ? `BEST ${best}` : '', CW - 60, 26);
+  drawTilt(CW - 30, 22);
+
+  if (game.state !== 'play') {
+    ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, CH / 2 - 50, CW, 100);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#4dff88'; ctx.font = '30px ui-monospace, Menlo, monospace';
+    ctx.fillText(game.state === 'won' ? 'SOLVED!' : '全クリア — ALL SOLVED!', CW / 2, CH / 2);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+    ctx.fillText(game.state === 'won' ? `${game.moves} moves — flick or Enter for the next level` : 'P to replay a level',
+                 CW / 2, CH / 2 + 30);
+  }
+}
+
+// small compass showing the current tilt; lit when past the step angle
+function drawTilt(x, y) {
+  ctx.strokeStyle = '#2a3040'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 14, 0, Math.PI * 2); ctx.stroke();
+  if (!Mugic.connected) return;
+  const k = 14 / Math.max(saved.tilt, 1);
+  const dx = Math.max(-14, Math.min(14, Mugic.yaw * k)), dy = Math.max(-14, Math.min(14, -Mugic.pitch * k));
+  ctx.fillStyle = tiltDir() ? '#4dff88' : '#7a8499';
+  ctx.beginPath(); ctx.arc(x + dx, y + dy, 4, 0, Math.PI * 2); ctx.fill();
+}
+
+const firstUnsolved = LEVELS.findIndex((_, i) => !saved.best[i]);
+loadLevel(firstUnsolved < 0 ? 0 : firstUnsolved);
+(function loop(now) { updateTilt(now); draw(); requestAnimationFrame(loop); })(performance.now());
+</script>
+</body>
+</html>

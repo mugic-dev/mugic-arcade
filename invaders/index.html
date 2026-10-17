@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Invaders</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<h1>MUGIC INVADERS</h1>
+<a class="back" href="../">← arcade</a>
+<div id="bar"></div>
+<canvas id="game" width="640" height="560"></canvas>
+<div id="tuning"></div>
+<p class="help">Put the MUGIC in BLE output mode (firmware ≥ 2.2.0), click Connect (Chrome/Edge), hold it level and
+  click Calibrate center. Roll tilts the cannon left/right; a sharp flick (energy spike) fires. Enter starts / restarts.</p>
+
+<script src="../common/mugic.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const input = { fire: false };
+Mugic.onFlick = () => { input.fire = true; };
+let range = 30;
+try { range = +localStorage.getItem('mugicInvadersRange') || 30; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → space',
+  extraRows: [['Range', `<input type="range" id="range" min="10" max="60" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicInvadersRange', range); } catch (e) {}
+};
+
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') { input.fire = true; e.preventDefault(); }
+  if (e.code === 'Enter' && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Game ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, GROUND = H - 30;
+const SPRITES = {
+  squid: ['..##..', '.####.', '##.#.#', '######', '.#..#.', '#.##.#'],
+  crab:  ['.#...#.', '..#.#..', '.#####.', '##.#.##', '#######', '#.#.#.#'],
+  octo:  ['..####..', '########', '##.##.##', '########', '.##..##.', '##....##'],
+  ship:  ['....#....', '...###...', '.#######.', '#########', '#########'],
+  ufo:   ['...####...', '.########.', '##.##.##.#', '##########', '..#....#..'],
+};
+const ROW_TYPES = ['squid', 'crab', 'crab', 'octo', 'octo'];
+const POINTS = { squid: 30, crab: 20, octo: 10 };
+const COLORS = { squid: '#ff6bd6', crab: '#6bc8ff', octo: '#4dff88', ship: '#4dff88', ufo: '#ff5a5a' };
+
+function drawSprite(name, x, y, px, frame) {
+  ctx.fillStyle = COLORS[name];
+  const rows = SPRITES[name];
+  rows.forEach((row, j) => {
+    for (let i = 0; i < row.length; ++i) {
+      // second animation frame: mirror the legs (last row)
+      const c = frame && j === rows.length - 1 ? row[row.length - 1 - i] : row[i];
+      if (c === '#') ctx.fillRect(x + i * px, y + j * px, px, px);
+    }
+  });
+}
+const spriteW = (name, px) => SPRITES[name][0].length * px;
+
+const game = { state: 'title', score: 0, hi: 0, lives: 3, level: 1 };
+try { game.hi = +localStorage.getItem('mugicInvadersHi') || 0; } catch (e) {}
+
+function newGame() { game.score = 0; game.lives = 3; game.level = 1; newWave(); game.state = 'play'; }
+
+function newWave() {
+  game.ship = { x: W / 2, w: spriteW('ship', 4), dead: 0 };
+  game.shot = null; game.bombs = []; game.ufo = null; game.ufoTimer = 15 + Math.random() * 10;
+  game.aliens = [];
+  for (let r = 0; r < 5; ++r) {
+    for (let c = 0; c < 11; ++c) {
+      game.aliens.push({ type: ROW_TYPES[r], x: 60 + c * 44, y: 70 + r * 36 + Math.min(game.level - 1, 5) * 12, alive: true });
+    }
+  }
+  game.dir = 1; game.stepTimer = 0; game.frame = 0;
+  game.bunkers = [];
+  for (let b = 0; b < 4; ++b) {
+    const bx = 80 + b * 140;
+    for (let i = 0; i < 12; ++i) {
+      for (let j = 0; j < 8; ++j) {
+        if (j > 5 && i > 3 && i < 8) continue;   // arch
+        if (j === 0 && (i < 2 || i > 9)) continue;
+        game.bunkers.push({ x: bx + i * 4, y: GROUND - 90 + j * 4 });
+      }
+    }
+  }
+}
+
+const overlap = (ax, ay, aw, ah, bx, by, bw, bh) => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+
+function hitBunker(x, y, w, h) {
+  const i = game.bunkers.findIndex(p => overlap(x, y, w, h, p.x, p.y, 4, 4));
+  if (i < 0) return false;
+  // chip a small hole
+  game.bunkers = game.bunkers.filter(p => Math.abs(p.x - game.bunkers[i].x) > 4 || Math.abs(p.y - game.bunkers[i].y) > 4);
+  return true;
+}
+
+function update(dt) {
+  const s = game.ship;
+  if (s.dead > 0) {
+    s.dead -= dt;
+    if (s.dead <= 0) { if (game.lives <= 0) endGame(); else { s.x = W / 2; game.bombs = []; } }
+    input.fire = false;
+    return;
+  }
+  // ship: MUGIC roll maps to position; keyboard moves at fixed speed
+  if (Mugic.connected) {
+    const r = Math.max(-1, Math.min(1, Mugic.roll / range));
+    const target = W / 2 + r * (W / 2 - s.w / 2 - 10);
+    s.x += (target - s.x) * Math.min(1, dt * 12);
+  }
+  if (keys.ArrowLeft) s.x -= 300 * dt;
+  if (keys.ArrowRight) s.x += 300 * dt;
+  s.x = Math.max(s.w / 2 + 10, Math.min(W - s.w / 2 - 10, s.x));
+
+  if (input.fire && !game.shot) game.shot = { x: s.x - 1, y: GROUND - 26 };
+  input.fire = false;
+  if (game.shot) {
+    game.shot.y -= 600 * dt;
+    if (game.shot.y < 30 || hitBunker(game.shot.x, game.shot.y, 3, 12)) game.shot = null;
+  }
+
+  // alien march: fewer aliens -> faster steps
+  const alive = game.aliens.filter(a => a.alive);
+  game.stepTimer -= dt;
+  if (game.stepTimer <= 0) {
+    game.stepTimer = Math.max(0.03, 0.02 + alive.length / 55 * 0.6 / (1 + (game.level - 1) * 0.15));
+    game.frame ^= 1;
+    const minX = Math.min(...alive.map(a => a.x)), maxX = Math.max(...alive.map(a => a.x + spriteW(a.type, 4)));
+    if ((game.dir > 0 && maxX + 10 > W - 10) || (game.dir < 0 && minX - 10 < 10)) {
+      game.dir = -game.dir;
+      alive.forEach(a => { a.y += 16; });
+    } else {
+      alive.forEach(a => { a.x += 10 * game.dir; });
+    }
+  }
+
+  // collisions: shot vs aliens / ufo
+  if (game.shot) {
+    for (const a of alive) {
+      if (overlap(game.shot.x, game.shot.y, 3, 12, a.x, a.y, spriteW(a.type, 4), 24)) {
+        a.alive = false; game.shot = null; addScore(POINTS[a.type]);
+        boom(a.x + 12, a.y + 12, COLORS[a.type]);
+        break;
+      }
+    }
+  }
+  if (game.ufo) {
+    game.ufo.x += game.ufo.vx * dt;
+    if (game.shot && overlap(game.shot.x, game.shot.y, 3, 12, game.ufo.x, 36, spriteW('ufo', 3), 15)) {
+      const pts = [50, 100, 150, 300][Math.floor(Math.random() * 4)];
+      addScore(pts); boom(game.ufo.x + 15, 44, COLORS.ufo, pts); game.ufo = null; game.shot = null;
+    } else if (game.ufo.x < -40 || game.ufo.x > W + 40) {
+      game.ufo = null;
+    }
+  } else if ((game.ufoTimer -= dt) <= 0) {
+    const left = Math.random() < 0.5;
+    game.ufo = { x: left ? -30 : W + 10, vx: left ? 110 : -110 };
+    game.ufoTimer = 20 + Math.random() * 15;
+  }
+
+  // bombs: drop from the bottom alien of a random column
+  if (Math.random() < dt * (0.8 + game.level * 0.3) && game.bombs.length < 3 + game.level) {
+    const cols = {};
+    alive.forEach(a => { const k = Math.round(a.x / 44); if (!cols[k] || cols[k].y < a.y) cols[k] = a; });
+    const shooters = Object.values(cols);
+    const a = shooters[Math.floor(Math.random() * shooters.length)];
+    if (a) game.bombs.push({ x: a.x + 12, y: a.y + 24 });
+  }
+  game.bombs = game.bombs.filter(b => {
+    b.y += (180 + game.level * 20) * dt;
+    if (b.y > GROUND || hitBunker(b.x, b.y, 3, 10)) return false;
+    if (overlap(b.x, b.y, 3, 10, s.x - s.w / 2, GROUND - 22, s.w, 20)) { killShip(); return false; }
+    return true;
+  });
+
+  // aliens erode bunkers, and landing ends the game
+  alive.forEach(a => {
+    hitBunker(a.x, a.y, spriteW(a.type, 4), 24);
+    if (a.y + 24 >= GROUND - 22) { game.lives = 0; killShip(); }
+  });
+
+  if (!alive.length) { ++game.level; newWave(); }
+  game.booms = (game.booms || []).filter(b => (b.t -= dt) > 0);
+}
+
+function killShip() { if (game.ship.dead > 0) return; --game.lives; game.ship.dead = 1.5; boom(game.ship.x, GROUND - 12, COLORS.ship); }
+function endGame() { game.state = 'over'; if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicInvadersHi', game.hi); } catch (e) {} } }
+function addScore(n) { game.score += n; }
+function boom(x, y, color, label) { (game.booms = game.booms || []).push({ x, y, color, label, t: 0.4 }); }
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText('SCORE ' + String(game.score).padStart(5, '0'), 12, 22);
+  ctx.textAlign = 'center'; ctx.fillText('HI ' + String(game.hi).padStart(5, '0'), W / 2, 22);
+  ctx.textAlign = 'right'; ctx.fillText('LEVEL ' + game.level + '   LIVES ' + Math.max(0, game.lives), W - 12, 22);
+
+  if (game.state !== 'title') {
+    game.aliens.forEach(a => { if (a.alive) drawSprite(a.type, a.x, a.y, 4, game.frame); });
+    ctx.fillStyle = '#4dff88';
+    game.bunkers.forEach(p => ctx.fillRect(p.x, p.y, 4, 4));
+    if (game.ufo) drawSprite('ufo', game.ufo.x, 36, 3, 0);
+    const s = game.ship;
+    if (!(s.dead > 0) || Math.floor(s.dead * 10) % 2) drawSprite('ship', s.x - s.w / 2, GROUND - 22, 4, 0);
+    ctx.fillStyle = '#fff';
+    if (game.shot) ctx.fillRect(game.shot.x, game.shot.y, 3, 12);
+    ctx.fillStyle = '#ffdd55';
+    game.bombs.forEach(b => ctx.fillRect(b.x + ((b.y / 6 | 0) % 2) * 2 - 1, b.y, 3, 10));
+    (game.booms || []).forEach(b => {
+      ctx.fillStyle = b.color; ctx.textAlign = 'center';
+      if (b.label) ctx.fillText(b.label, b.x, b.y);
+      else for (let i = 0; i < 8; ++i) { const an = i * Math.PI / 4, d = (0.4 - b.t) * 60; ctx.fillRect(b.x + Math.cos(an) * d, b.y + Math.sin(an) * d, 3, 3); }
+    });
+  }
+  ctx.fillStyle = '#4dff88'; ctx.fillRect(0, GROUND + 4, W, 2);
+
+  ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
+  if (game.state === 'title') {
+    ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('MUGIC INVADERS', W / 2, 180);
+    ctx.font = '16px ui-monospace, Menlo, monospace';
+    [['squid', 30], ['crab', 20], ['octo', 10]].forEach(([t, p], i) => {
+      drawSprite(t, W / 2 - 80, 240 + i * 40, 4, 0); ctx.fillStyle = '#fff'; ctx.fillText('= ' + p + ' PTS', W / 2 + 20, 258 + i * 40);
+    });
+    drawSprite('ufo', W / 2 - 82, 362, 3, 0); ctx.fillStyle = '#fff'; ctx.fillText('= ? MYSTERY', W / 2 + 20, 378);
+    ctx.fillText('PRESS ENTER (or flick the MUGIC) TO START', W / 2, 450);
+  } else if (game.state === 'over') {
+    ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#ff5a5a'; ctx.fillText('GAME OVER', W / 2, H / 2 - 10);
+    ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillStyle = '#fff'; ctx.fillText('PRESS ENTER (or flick) TO PLAY AGAIN', W / 2, H / 2 + 30);
+  }
+}
+
+let last = performance.now(), overAt = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play') update(dt);
+  else {
+    if (game.state === 'over' && !overAt) overAt = now;
+    // a flick starts the game (ignore flicks right after game over)
+    if (input.fire && (game.state === 'title' || now - overAt > 1500)) { overAt = 0; newGame(); }
+    input.fire = false;
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
