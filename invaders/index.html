@@ -48,29 +48,35 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 // ---------- Game ----------
 const cv = $('game'), ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height, GROUND = H - 30;
+// Each sprite: one or two animation frames of rows. '#' body, 'o' eye white, '*' pupil/mouth, 'c' rosy cheek, 'y' light.
 const SPRITES = {
-  squid: ['..##..', '.####.', '##.#.#', '######', '.#..#.', '#.##.#'],
-  crab:  ['.#...#.', '..#.#..', '.#####.', '##.#.##', '#######', '#.#.#.#'],
-  octo:  ['..####..', '########', '##.##.##', '########', '.##..##.', '##....##'],
-  ship:  ['....#....', '...###...', '.#######.', '#########', '#########'],
-  ufo:   ['...####...', '.########.', '##.##.##.#', '##########', '..#....#..'],
+  squid: [['...####...', '..######..', '.##oooo##.', '.##o**o##.', '.########.', '.#.#..#.#.', '#..#..#..#', '.#..#..#..'],   // one-eyed jelly
+          ['...####...', '..######..', '.##oooo##.', '.##**oo##.', '.########.', '.#.#..#.#.', '.#..#..#..', '#..#..#..#']],
+  crab:  [['o........o', '.#......#.', '..######..', '.#oo##oo#.', '.#o*##*o#.', '#c##**##c#', '.########.', '.#..##..#.'],  // boing-antenna blusher
+          ['.o......o.', '.#......#.', '..######..', '.#oo##oo#.', '.#*o##*o#.', '#c##**##c#', '.########.', '#..#..#..#']],
+  octo:  [['.#.#..#.#.', '..######..', '.#oo##oo#.', '##o*##o*##', '##########', '###*cc*###', '.########.', '.##....##.'],  // googly fuzzball
+          ['#.#..#.#..', '..######..', '.#oo##oo#.', '##*o##*o##', '##########', '###*cc*###', '.########.', '##......##']],
+  ship:  [['....#....', '...###...', '.#######.', '#########', '#########']],
+  ufo:   [['....oo....', '...o**o...', '.########.', '##y##y##y#', '..#....#..'],      // saucer with a peeking pilot
+          ['....oo....', '...o**o...', '.########.', '#y##y##y##', '..#....#..']],
 };
+const ALIEN_PX = 3;   // aliens are 10x8 pixels drawn 3 px each: 30x24
 const ROW_TYPES = ['squid', 'crab', 'crab', 'octo', 'octo'];
 const POINTS = { squid: 30, crab: 20, octo: 10 };
 const COLORS = { squid: '#ff6bd6', crab: '#6bc8ff', octo: '#4dff88', ship: '#4dff88', ufo: '#ff5a5a' };
+const INK = { o: '#ffffff', '*': '#14141c', c: '#ff9ec4', y: '#ffe14d' };
 
 function drawSprite(name, x, y, px, frame) {
-  ctx.fillStyle = COLORS[name];
-  const rows = SPRITES[name];
+  const frames = SPRITES[name], rows = frames[frame % frames.length];
   rows.forEach((row, j) => {
     for (let i = 0; i < row.length; ++i) {
-      // second animation frame: mirror the legs (last row)
-      const c = frame && j === rows.length - 1 ? row[row.length - 1 - i] : row[i];
-      if (c === '#') ctx.fillRect(x + i * px, y + j * px, px, px);
+      const c = row[i]; if (c === '.') continue;
+      ctx.fillStyle = INK[c] || COLORS[name];
+      ctx.fillRect(x + i * px, y + j * px, px, px);
     }
   });
 }
-const spriteW = (name, px) => SPRITES[name][0].length * px;
+const spriteW = (name, px) => SPRITES[name][0][0].length * px;
 
 const game = { state: 'title', score: 0, hi: 0, lives: 3, level: 1 };
 try { game.hi = +localStorage.getItem('mugicInvadersHi') || 0; } catch (e) {}
@@ -139,7 +145,7 @@ function update(dt) {
   if (game.stepTimer <= 0) {
     game.stepTimer = Math.max(0.03, 0.02 + alive.length / 55 * 0.6 / (1 + (game.level - 1) * 0.15));
     game.frame ^= 1;
-    const minX = Math.min(...alive.map(a => a.x)), maxX = Math.max(...alive.map(a => a.x + spriteW(a.type, 4)));
+    const minX = Math.min(...alive.map(a => a.x)), maxX = Math.max(...alive.map(a => a.x + spriteW(a.type, ALIEN_PX)));
     if ((game.dir > 0 && maxX + 10 > W - 10) || (game.dir < 0 && minX - 10 < 10)) {
       game.dir = -game.dir;
       alive.forEach(a => { a.y += 16; });
@@ -151,7 +157,7 @@ function update(dt) {
   // collisions: shot vs aliens / ufo
   if (game.shot) {
     for (const a of alive) {
-      if (overlap(game.shot.x, game.shot.y, 3, 12, a.x, a.y, spriteW(a.type, 4), 24)) {
+      if (overlap(game.shot.x, game.shot.y, 3, 12, a.x, a.y, spriteW(a.type, ALIEN_PX), 24)) {
         a.alive = false; game.shot = null; addScore(POINTS[a.type]);
         boom(a.x + 12, a.y + 12, COLORS[a.type]);
         break;
@@ -189,7 +195,7 @@ function update(dt) {
 
   // aliens erode bunkers, and landing ends the game
   alive.forEach(a => {
-    hitBunker(a.x, a.y, spriteW(a.type, 4), 24);
+    hitBunker(a.x, a.y, spriteW(a.type, ALIEN_PX), 24);
     if (a.y + 24 >= GROUND - 22) { game.lives = 0; killShip(); }
   });
 
@@ -216,10 +222,10 @@ function draw() {
   ctx.textAlign = 'right'; ctx.fillText('LEVEL ' + game.level + '   LIVES ' + Math.max(0, game.lives), W - 12, 22);
 
   if (game.state !== 'title') {
-    game.aliens.forEach(a => { if (a.alive) drawSprite(a.type, a.x, a.y, 4, game.frame); });
+    game.aliens.forEach(a => { if (a.alive) drawSprite(a.type, a.x, a.y, ALIEN_PX, game.frame); });
     ctx.fillStyle = '#4dff88';
     game.bunkers.forEach(p => ctx.fillRect(p.x, p.y, 4, 4));
-    if (game.ufo) drawSprite('ufo', game.ufo.x, 36, 3, 0);
+    if (game.ufo) drawSprite('ufo', game.ufo.x, 36, 3, Math.floor(performance.now() / 150));
     const s = game.ship;
     if (!(s.dead > 0) || Math.floor(s.dead * 10) % 2) drawSprite('ship', s.x - s.w / 2, GROUND - 22, 4, 0);
     ctx.fillStyle = '#fff';
@@ -239,7 +245,7 @@ function draw() {
     ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('ALIEN ATTACK', W / 2, 180);
     ctx.font = '16px ui-monospace, Menlo, monospace';
     [['squid', 30], ['crab', 20], ['octo', 10]].forEach(([t, p], i) => {
-      drawSprite(t, W / 2 - 80, 240 + i * 40, 4, 0); ctx.fillStyle = '#fff'; ctx.fillText('= ' + p + ' PTS', W / 2 + 20, 258 + i * 40);
+      drawSprite(t, W / 2 - 80, 240 + i * 40, ALIEN_PX, 0); ctx.fillStyle = '#fff'; ctx.fillText('= ' + p + ' PTS', W / 2 + 20, 258 + i * 40);
     });
     drawSprite('ufo', W / 2 - 82, 362, 3, 0); ctx.fillStyle = '#fff'; ctx.fillText('= ? MYSTERY', W / 2 + 20, 378);
     ctx.fillText('PRESS ENTER (or flick the MUGIC) TO START', W / 2, 450);
