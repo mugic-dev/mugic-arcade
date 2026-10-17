@@ -114,9 +114,9 @@ const Mugic = (() => {
     return null;
   }
 
-  // ConfigTaskResponse.get_configuration_response (8) -> GetConfigurationResponse.mac_addr (12)
+  // ConfigTaskResponse.get_diagnostics_response (7) -> GetDiagnosticsResponse.mac_addr (12, the label MAC from NVS)
   function onConfig(e) {
-    const resp = pbField(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength), 8);
+    const resp = pbField(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength), 7);
     const mac = resp && pbField(resp, 12);
     if (!mac || mac.length < 6) return;
     m.deviceCode = String.fromCharCode(...mac).toLowerCase().replace(/[^0-9a-f]/g, '').slice(-6);
@@ -134,11 +134,16 @@ const Mugic = (() => {
       await ch.startNotifications();
       m.connected = true; devName = dev.name;
       status('connected: ' + dev.name, true);
-      // ask for the configuration (ConfigTaskCommand.get_configuration = field 8, empty) to learn the device code
+      // ask for diagnostics (ConfigTaskCommand.get_diagnostics = field 7, empty) to learn the device code;
+      // ask again a couple of times if no answer arrives
       const cfg = await (await server.getPrimaryService(SERVICE)).getCharacteristic(CONFIG_CHAR);
       cfg.addEventListener('characteristicvaluechanged', onConfig);
       await cfg.startNotifications();
-      await cfg.writeValue(new Uint8Array([0x42, 0x00]));
+      for (let i = 0; i < 3 && !m.deviceCode && m.connected; ++i) {
+        await cfg.writeValue(new Uint8Array([0x3a, 0x00])).catch(err => console.warn('device code request failed', err));
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      if (!m.deviceCode && m.connected) status(`connected: ${devName} (device code not read — scores can't be posted)`, true);
       setTimeout(m.calibrate, 500);
     } catch (err) {
       console.error(err); status('connect failed: ' + err.message, false);

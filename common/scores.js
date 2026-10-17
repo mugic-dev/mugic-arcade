@@ -40,7 +40,11 @@ const Scores = (() => {
 
   async function submit({ game, mode = 'normal', level = null, score }) {
     if (!enabled()) return 'scoreboard not configured';
-    if (!Mugic.connected || !Mugic.deviceCode) return 'connect a MUGIC to post scores';
+    if (!Mugic.connected || !Mugic.deviceCode) {
+      const why = Mugic.connected ? 'the MUGIC device code was not read (reconnect the MUGIC)' : 'no MUGIC connected';
+      notice(`Score ${score} not posted: ${why}.`);
+      return why;
+    }
     const initials = await askInitials(`${score} — enter your initials (MUGIC ${Mugic.deviceCode})`);
     if (!initials) return 'skipped';
     const r = await fetch(`${SUPABASE_URL}/rest/v1/scores`, { method: 'POST', headers: headers(),
@@ -53,6 +57,15 @@ const Scores = (() => {
       ? '<table class="sc-table">' + rows.map((r, i) =>
           `<tr><td>${i + 1}.</td><td>${r.initials}</td><td>${r.score}${unit}</td><td class="sc-dev">${r.device}</td></tr>`).join('') + '</table>'
       : `<p class="sc-empty">${enabled() ? 'no scores yet' : 'scoreboard not configured'}</p>`;
+  }
+
+  function notice(text) {
+    const d = document.createElement('dialog');
+    d.className = 'sc-dialog';
+    d.innerHTML = `<form method="dialog"><p>${text}</p><div><button>OK</button></div></form>`;
+    document.body.append(d);
+    d.showModal();
+    d.addEventListener('close', () => d.remove());
   }
 
   const busy = () => !!document.querySelector('.sc-dialog');   // initials entry open: games ignore input
