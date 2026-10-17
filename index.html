@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="common/arcade.css">
 <script src="common/config.js"></script>
 <script src="common/scores.js"></script>
+<script src="common/mugic.js"></script>
 <style>
   .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; width: min(1040px, 100%); margin-top: 10px; }
   .games .scores { width: auto; margin-top: 0; }
@@ -18,10 +19,16 @@
   .games a.scores { padding: 10px; }
   .games a.scores img { display: none; }
   h1.banner { margin-top: 34px; }
+  /* games open in this frame over the menu, so the MUGIC connection (held by this page) carries over */
+  #frame { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); display: none; z-index: 10; }
+  body.playing #frame { display: block; }
+  body.playing { overflow: hidden; }
 </style>
 </head>
 <body>
 <h1>MUGIC ARCADE</h1>
+<div class="mg-bar"><button id="mgConnect">Connect MUGIC</button><span id="mgStatus">not connected — connect once, it stays connected from game to game</span></div>
+<iframe id="frame" title="game" allow="fullscreen"></iframe>
 <div class="games" id="cards"></div>
 <p class="help">Needs a MUGIC in BLE output mode (firmware ≥ 2.2.0) and Chrome or Edge on a computer or Android
   (iPhone/iPad browsers have no Web Bluetooth). Every game also plays with the keyboard.</p>
@@ -33,9 +40,39 @@
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => s.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
-$('cards').innerHTML = GAMES.map(g => `<a href="${g.id}/"><img src="shots/${g.id}.webp" alt="" loading="lazy">
+$('cards').innerHTML = GAMES.map(g => `<a data-frame href="${g.id}/"><img src="shots/${g.id}.webp" alt="" loading="lazy">
   <h2>${esc(g.name)}</h2><p>${esc(g.blurb)}</p></a>`).join('');
-$('boards').innerHTML = GAMES.map(g => `<a class="scores" href="scores/?game=${g.id}">
+Mugic.mountStatus($('mgStatus'));
+$('mgConnect').onclick = Mugic.connect;
+
+// ---------- game frame: '#<path>' (e.g. #toss/, #scores/?game=toss) shows that page over the menu ----------
+const frame = $('frame'), BASE = location.pathname.replace(/[^/]*$/, '');
+const framePath = () => decodeURIComponent(location.hash.slice(1));
+function sync() {
+  const path = framePath();
+  document.body.classList.toggle('playing', !!path);
+  // location.replace, not src: frame navigations must not add browser history entries
+  if (!path) { frame.dataset.path = ''; frame.contentWindow.location.replace('about:blank'); refresh(true); return; }
+  if (frame.dataset.path !== path) { frame.dataset.path = path; frame.contentWindow.location.replace(BASE + path); }
+}
+function closeFrame() { if (history.state && history.state.opened) history.back(); else { history.replaceState(null, '', BASE); sync(); } }
+addEventListener('popstate', sync);
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[data-frame]');
+  if (!a || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;   // new tab etc. as usual
+  e.preventDefault();
+  history.pushState({ opened: true }, '', '#' + a.getAttribute('href')); sync();
+});
+frame.addEventListener('load', () => {
+  let w; try { w = frame.contentWindow; if (w.location.href === 'about:blank') return; } catch (err) { return; }
+  const path = w.location.pathname.slice(BASE.length) + w.location.search;
+  if (!path) { closeFrame(); return; }                                  // navigated back to the menu
+  if (path !== framePath()) { frame.dataset.path = path; history.replaceState(history.state, '', '#' + path); }
+  w.document.querySelectorAll('a.back').forEach(a => a.addEventListener('click', e => { e.preventDefault(); closeFrame(); }));
+  w.focus();
+});
+
+$('boards').innerHTML = GAMES.map(g => `<a class="scores" data-frame href="scores/?game=${g.id}">
   <h3>${esc(g.short || g.name.toUpperCase())} — ${g.board || 'TOP 10'}</h3><div id="b-${g.id}"></div></a>`).join('');
 
 function renderAll() {
@@ -52,7 +89,7 @@ function renderAll() {
 // re-rendering only when it changed. Also refresh right away when coming back to this page.
 let newest;
 async function refresh(force) {
-  if (document.hidden) return;
+  if (document.hidden || document.body.classList.contains('playing')) return;
   try {
     const t = await Scores.latest();
     if (force || t !== newest) { newest = t; renderAll(); }
@@ -63,6 +100,7 @@ Scores.latest().then(t => { newest = t; }).catch(() => {});
 setInterval(refresh, 3000);
 addEventListener('pageshow', e => { if (e.persisted) refresh(true); });
 document.addEventListener('visibilitychange', () => refresh());
+sync();
 </script>
 </body>
 </html>

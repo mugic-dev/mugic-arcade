@@ -9,6 +9,8 @@
 //   Mugic.deviceCode            last 6 hex digits of the device's label MAC (e.g. 'baf234'), once read
 //   Mugic.battery / .batteryVolts  battery percent estimated from the voltage in each packet (as the plugin does
 //                               by default), and the voltage; null until a packet with a voltage arrives
+// Inside the arcade menu's game frame, a page uses the menu's connection (it survives switching games) and its
+// bar keeps only Calibrate (plus Connect while disconnected); opened on its own, a page connects by itself.
 const Mugic = (() => {
   const SERVICE = 0x5501, CONFIG_CHAR = 0x113A, DATA_CHAR = 0x113B;
   // OSC float args: acc xyz, euler xyz, gyro, mag, quat, battery volts (the int soc before it is skipped)
@@ -21,6 +23,11 @@ const Mugic = (() => {
     settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: false, invertYaw: false, thresh: 60 },
   };
   let raw = null, zero = { roll: 0, pitch: 0, yaw: 0, energy: 0 };
+  let hub = null;   // the menu's Mugic when running in its game frame
+  try { if (window.parent !== window) hub = window.parent.mugicShared || null; } catch (e) {}
+  const subs = new Set();   // game frames sharing this connection: { packet(view), status(text, ok, mugic) }
+  const each = fn => subs.forEach(s => { try { fn(s); } catch (e) { subs.delete(s); } });
+  m.subscribe = s => { subs.add(s); if (m.connected) s.status(lastStatus.text, true, m); return () => subs.delete(s); };
   const FLICK_BEFORE = 100, FLICK_AFTER = 150;   // ms of motion around the energy spike that give its direction
   let history = [];                               // recent { t, roll, pitch, yaw }
   const AXIS_VERSION = 4;                         // bump when the default axes change, to drop stale saved ones
@@ -66,10 +73,10 @@ const Mugic = (() => {
   // Wrap an angle difference into (-180, 180].
   const wrap = a => ((a + 540) % 360) - 180;
 
-  function onPacket(e) {
-    const f = parseOsc(e.target.value);
+  function onPacket(view) {
+    const f = parseOsc(view);
     if (f.length < 6) return;
-    if (f.length > BATT_VOLTS) battery(f[BATT_VOLTS]);
+    if (f.length > BATT_VOLTS && !hub) battery(f[BATT_VOLTS]);
     const s = m.settings, ax = f[ACC], ay = f[ACC + 1], az = f[ACC + 2];
     raw = { energy: ax * ax + ay * ay + az * az };
     for (const a in AXES) {
@@ -153,7 +160,7 @@ const Mugic = (() => {
       });
       const server = await dev.gatt.connect();
       const ch = await (await server.getPrimaryService(SERVICE)).getCharacteristic(DATA_CHAR);
-      ch.addEventListener('characteristicvaluechanged', onPacket);
+      ch.addEventListener('characteristicvaluechanged', e => { onPacket(e.target.value); each(s => s.packet(e.target.value)); });
       await ch.startNotifications();
       m.connected = true; devName = dev.name;
       // The firmware names each device 'mu' + the last 6 hex digits of its label MAC (e.g. mubaf234); use that
@@ -181,8 +188,15 @@ const Mugic = (() => {
     }
   };
 
-  let statusEl = null, devName = '';
-  function status(text, ok) { if (statusEl) { statusEl.textContent = text; statusEl.classList.toggle('ok', ok); } }
+  let statusEl = null, devName = '', lastStatus = { text: '', ok: false };
+  function status(text, ok) {
+    lastStatus = { text, ok };
+    if (statusEl) { statusEl.textContent = text; statusEl.classList.toggle('ok', ok); }
+    const btn = hub && statusEl && document.getElementById('mgConnect');
+    if (btn) btn.hidden = m.connected;
+    each(s => s.status(text, ok, m));
+  }
+  m.mountStatus = el => { statusEl = el; };
 
   // Render the connect/calibrate bar into `barEl` and the tuning meters into `tuneEl`.
   // `axes` picks which of roll/pitch/yaw the game uses; extraRows are [label, html, valueId] triples.
@@ -201,6 +215,11 @@ const Mugic = (() => {
         <span>Energy</span><div class="mg-meter" id="mgEnergyM"><i></i><b></b></div><span id="mgEnergyV">0</span>
         <span id="mgFlickL">Flick at</span><input type="range" id="mgThresh" min="5" max="400"><span id="mgThreshV"></span>`;
     statusEl = barEl.querySelector('#mgStatus');
+    if (hub) {   // in the menu's frame: connection and axes are set up there, keep Calibrate
+      barEl.querySelectorAll('label').forEach(l => l.remove());
+      barEl.querySelector('#mgConnect').hidden = m.connected;
+      if (m.connected) status(lastStatus.text, true);
+    }
     const $ = id => document.getElementById(id), s = m.settings;
     $('mgConnect').onclick = m.connect;
     $('mgCal').onclick = m.calibrate;
@@ -228,5 +247,20 @@ const Mugic = (() => {
     })();
   };
 
+  window.mugicShared = m;   // for game frames (a top-level const isn't a window property)
+  if (hub) {
+    m.connect = () => hub.connect();
+    m.settings = hub.settings;   // same axes / threshold as the menu
+    const unsub = hub.subscribe({
+      packet: onPacket,
+      status: (text, ok, h) => {
+        const was = m.connected;
+        Object.assign(m, { connected: h.connected, deviceCode: h.deviceCode, battery: h.battery, batteryVolts: h.batteryVolts });
+        status(text, ok);
+        if (m.connected && !was) setTimeout(m.calibrate, 500);
+      },
+    });
+    addEventListener('pagehide', unsub);
+  }
   return m;
 })();
