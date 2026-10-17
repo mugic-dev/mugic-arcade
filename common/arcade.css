@@ -30,3 +30,5 @@ canvas { background: #000; border: 1px solid #1d2230; max-width: 100%; height: a
 .sc-dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--acc); border-radius: 8px; text-align: center; }
 .sc-dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 .sc-dialog input { width: 5ch; font-size: 28px; text-align: center; letter-spacing: 6px; text-transform: uppercase; margin: 6px 0 12px; }
+.mg-lit { color: var(--acc); font-weight: bold; }
+.mg-meter > b.mg-lit { background: var(--acc); width: 4px; }

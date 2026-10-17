@@ -13,7 +13,7 @@ const Mugic = (() => {
   const STORE = 'mugicArcade';
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
-    connected: false, deviceCode: null, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
+    connected: false, deviceCode: null, flicks: 0, lastFlickAt: -Infinity, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
     // as mounted in the MUGIC: euler X = yaw, Y = pitch, Z = roll (reversed)
     settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: false, invertYaw: false, thresh: 60 },
   };
@@ -77,6 +77,7 @@ const Mugic = (() => {
     history.push({ t: now, roll: m.roll, pitch: m.pitch, yaw: m.yaw });
     history = history.filter(h => now - h.t < 500);
     if (flick(m.energy, now)) {
+      ++m.flicks; m.lastFlickAt = now;
       if (m.onFlick) m.onFlick();
       if (m.onFlickDir) setTimeout(() => m.onFlickDir(flickDelta(now)), FLICK_AFTER);
     }
@@ -162,7 +163,7 @@ const Mugic = (() => {
         ${axes.map(a => `<span>${AXES[a]}</span><div class="mg-meter" id="mg${cap(a)}M"><i></i></div><span id="mg${cap(a)}V">0°</span>`).join('')}
         ${extraRows.map(([label, html, id]) => `<span>${label}</span>${html}<span id="${id}"></span>`).join('')}
         <span>Energy</span><div class="mg-meter" id="mgEnergyM"><i></i><b></b></div><span id="mgEnergyV">0</span>
-        <span>Flick at</span><input type="range" id="mgThresh" min="5" max="400"><span id="mgThreshV"></span>`;
+        <span id="mgFlickL">Flick at</span><input type="range" id="mgThresh" min="5" max="400"><span id="mgThreshV"></span>`;
     statusEl = barEl.querySelector('#mgStatus');
     const $ = id => document.getElementById(id), s = m.settings;
     $('mgConnect').onclick = m.connect;
@@ -183,6 +184,10 @@ const Mugic = (() => {
       em.firstElementChild.style.left = 0; em.firstElementChild.style.width = Math.min(100, m.energy / max * 100) + '%';
       em.lastElementChild.style.left = s.thresh / max * 100 + '%';
       $('mgEnergyV').textContent = m.energy.toFixed(0); $('mgThreshV').textContent = s.thresh;
+      // light up for a moment each time a flick is detected (energy crossing the red line)
+      const lit = performance.now() - m.lastFlickAt < 400;
+      $('mgFlickL').textContent = m.flicks ? `Flick at (${m.flicks})` : 'Flick at';
+      $('mgFlickL').classList.toggle('mg-lit', lit); em.lastElementChild.classList.toggle('mg-lit', lit);
       requestAnimationFrame(tick);
     })();
   };
