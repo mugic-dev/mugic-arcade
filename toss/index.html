@@ -13,10 +13,12 @@
 <canvas id="game" width="640" height="420"></canvas>
 <div class="scores"><h3>GLOBAL TOP 10 — LONGEST STREAK</h3><div id="board"></div></div>
 <div id="tuning"></div>
-<p class="help">Connect, point the MUGIC at the bin and click Calibrate center. Aim by pointing left/right (yaw: the dotted
-  line on the floor follows), then make a throwing flick: the harder the throw, the further the paper flies. Watch the
-  wind. One miss ends the streak, and after a few baskets the bin starts to move. If throw strength is hard to control,
-  switch "Power from" to tilt: the paper then goes further the more you tip the MUGIC up as you throw.
+<p class="help">Connect, point the MUGIC at the bin and click Calibrate center. Set up the throw, then make a throwing flick:
+  point left/right (yaw) to aim — the dotted line on the floor follows; tip up (pitch) for a higher, steeper arc
+  (level = flat 45°, tipped up 25° = 70° lob: drops in more easily but the wind has longer to push it); twist (roll) to
+  put spin on it, which curves the paper — use it against the wind. The harder the throw, the further the paper flies.
+  One miss ends the streak, and after a few baskets the bin starts to move. If throw strength is hard to control,
+  switch "Power from" to tilt: tipping up then sets the distance (and the arc stays at 60°).
   Keyboard (practice, not posted): ← → aim, hold space to charge, release to throw.</p>
 
 <script src="../common/mugic.js"></script>
@@ -29,7 +31,7 @@ try { Object.assign(opts, JSON.parse(localStorage.getItem('mugicTossOpts')) || {
 const saveOpts = () => { try { localStorage.setItem('mugicTossOpts', JSON.stringify(opts)); } catch (e) {} };
 Mugic.mountPanel($('bar'), $('tuning'), {
   keys: '← → space',
-  axes: ['yaw', 'pitch'],
+  axes: ['yaw', 'pitch', 'roll'],
   extraRows: [
     ['Power from', `<select id="source"><option value="throw">throw strength</option><option value="tilt">tilt up</option></select>`, 'sourceVal'],
     ['Full power at', `<input type="range" id="full" min="100" max="3000" step="50" value="${opts.full}">`, 'fullVal'],
@@ -47,6 +49,8 @@ const CAM = { y: 1.5, z: -2.0 }, F = 560, HORIZON = H * 0.42;
 const GRAVITY = 9.8, START = { x: 0, y: 1.3, z: 0 }, ELEV = 60 * Math.PI / 180, V_MIN = 5, V_MAX = 10.5;
 const RIM_H = 0.55, RIM_R = 0.25, BALL_R = 0.06, WIND_PUSH = 0.45;   // paper is light: wind accelerates it
 const AIM_GAIN = 0.5, AIM_MAX = 30, TILT_FULL = 35;                 // throw degrees per yaw degree; tilt (deg) for full power
+const ARC_MIN = 45, ARC_MAX = 70, ARC_TILT = 25;                     // launch angle (deg): level -> flat, tipped up ARC_TILT -> lob
+const SPIN_TILT = 30, SPIN_ACC = 1.5;                                // roll (deg) for full spin; sideways pull (m/s²) at full spin
 
 const proj = (x, y, z) => { const d = z - CAM.z; return { x: W / 2 + x / d * F, y: HORIZON - (y - CAM.y) / d * F, s: F / d }; };
 
@@ -71,13 +75,19 @@ function setupThrow() {
 const aimNow = () => Math.max(-AIM_MAX, Math.min(AIM_MAX, (Mugic.connected ? Mugic.yaw : 0) * AIM_GAIN + keyAim));
 function aimBefore(ms) {
   const t = performance.now() - ms, h = history.find(s => s.t >= t) || history[history.length - 1];
-  return h || { aim: aimNow(), pitch: Mugic.pitch };
+  return h || { aim: aimNow(), pitch: Mugic.pitch, roll: Mugic.roll };
 }
+const clamp1 = v => Math.max(-1, Math.min(1, v));
+// arc from pitch (unless pitch is the power source), spin from roll
+const arcOf = pitch => opts.source === 'tilt' ? 60 : ARC_MIN + (ARC_MAX - ARC_MIN) * Math.max(0, Math.min(1, pitch / ARC_TILT));
+const spinOf = roll => clamp1(roll / SPIN_TILT);
 
-function throwBall(power, aimDeg) {
-  const v = V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power)), a = aimDeg * Math.PI / 180;
-  game.ball = { ...START, vx: v * Math.cos(ELEV) * Math.sin(a), vy: v * Math.sin(ELEV), vz: v * Math.cos(ELEV) * Math.cos(a), spin: 0, bounced: false };
-  game.last = { power, aim: aimDeg };
+function throwBall(power, aimDeg, arcDeg = 60, spin = 0) {
+  // speed scaled with the arc so a given power reaches about the same distance whatever the arc
+  const el = arcDeg * Math.PI / 180, a = aimDeg * Math.PI / 180;
+  const v = (V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power))) * Math.sqrt(Math.sin(2 * ELEV) / Math.sin(2 * el));
+  game.ball = { ...START, vx: v * Math.cos(el) * Math.sin(a), vy: v * Math.sin(el), vz: v * Math.cos(el) * Math.cos(a), spin: 0, curve: spin, bounced: false };
+  game.last = { power, aim: aimDeg, arc: arcDeg, spinPct: Math.round(spin * 100) };
   game.state = 'flight';
 }
 
@@ -88,12 +98,12 @@ Mugic.onFlick = () => {
   if (game.state === 'title' || game.state === 'over') { newGame(); return; }
   if (game.state !== 'aim' || measuring) return;
   const before = aimBefore(250);
-  measuring = { peak: Mugic.energy, until: performance.now() + 160, aim: before.aim, pitch: before.pitch };
+  measuring = { peak: Mugic.energy, until: performance.now() + 160, aim: before.aim, pitch: before.pitch, roll: before.roll };
 };
 
 function update(dt) {
   const now = performance.now();
-  history.push({ t: now, aim: aimNow(), pitch: Mugic.pitch });
+  history.push({ t: now, aim: aimNow(), pitch: Mugic.pitch, roll: Mugic.roll });
   while (history.length && history[0].t < now - 1000) history.shift();
   if (keys.ArrowLeft) keyAim = Math.max(-AIM_MAX, keyAim - 30 * dt);
   if (keys.ArrowRight) keyAim = Math.min(AIM_MAX, keyAim + 30 * dt);
@@ -104,7 +114,7 @@ function update(dt) {
     if (now >= measuring.until) {
       const m = measuring; measuring = null;
       const power = opts.source === 'tilt' ? m.pitch / TILT_FULL : (m.peak - Mugic.settings.thresh) / (opts.full - Mugic.settings.thresh);
-      throwBall(power, m.aim);
+      throwBall(power, m.aim, arcOf(m.pitch), spinOf(m.roll));
       game.last.peak = Math.round(m.peak);
     }
   }
@@ -125,11 +135,15 @@ function update(dt) {
 
 function flight(p, dt) {
   const y0 = p.y;
-  p.vx += game.wind * WIND_PUSH * dt; p.vy -= GRAVITY * dt;
+  p.vx += (game.wind * WIND_PUSH + p.curve * SPIN_ACC) * dt; p.vy -= GRAVITY * dt;
   p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.spin += dt * 8;
   const b = game.bin, d = Math.hypot(p.x - b.x, p.z - b.z);
   if (y0 >= RIM_H && p.y < RIM_H) {                       // passing down through the rim's plane
-    if (d < RIM_R - BALL_R * 0.5) { done(true); return; }
+    // a steep drop gets in more easily: along the direction of travel the opening shrinks with a flatter entry
+    const hs = Math.hypot(p.vx, p.vz) || 1, along = ((p.x - b.x) * p.vx + (p.z - b.z) * p.vz) / hs;
+    const across = Math.sqrt(Math.max(0, d * d - along * along)), steep = Math.abs(p.vy) / Math.hypot(hs, p.vy);
+    const open = RIM_R - BALL_R * 0.5;
+    if ((across / open) ** 2 + (along / (open * steep * steep)) ** 2 < 1) { done(true); return; }
     if (d < RIM_R + BALL_R && !p.bounced) {               // clipped the rim: bounce off, outward
       const nx = (p.x - b.x) / d, nz = (p.z - b.z) / d, dot = p.vx * nx + p.vz * nz;
       p.vx = (p.vx - 2 * Math.min(0, dot) * nx) * 0.5; p.vz = (p.vz - 2 * Math.min(0, dot) * nz) * 0.5; p.vy = Math.abs(p.vy) * 0.35;
@@ -208,6 +222,14 @@ function draw() {
     const a = (measuring ? measuring.aim : aimNow()) * Math.PI / 180;
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
     for (let r = 0.6; r < 3.2; r += 0.25) { const q = proj(Math.sin(a) * r, 0, Math.cos(a) * r); ctx.beginPath(); ctx.arc(q.x, q.y, Math.max(1.5, q.s * 0.025), 0, Math.PI * 2); ctx.fill(); }
+    // spin and arc you'd throw with right now
+    if (Mugic.connected) {
+      const spin = spinOf(Mugic.roll), arc = arcOf(Mugic.pitch), q = proj(START.x, START.y, START.z + 0.6);
+      ctx.strokeStyle = '#c0392b'; ctx.lineWidth = 3;
+      if (Math.abs(spin) > 0.05) { ctx.beginPath(); ctx.arc(q.x, q.y, 26, -Math.PI / 2, -Math.PI / 2 + spin * Math.PI * 1.5, spin < 0); ctx.stroke(); }
+      ctx.fillStyle = '#222'; ctx.font = '12px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center';
+      ctx.fillText(`spin ${spin > 0 ? '→' : spin < 0 ? '←' : ''} ${Math.round(Math.abs(spin) * 100)}%` + (opts.source === 'tilt' ? '' : `   arc ${Math.round(arc)}°`), q.x, q.y + 46);
+    }
   }
 
   const ball = game.ball, b = game.bin;
@@ -235,7 +257,8 @@ function draw() {
     ctx.fillStyle = '#ff9f3a'; ctx.fillRect(W / 2 - 80, H - 34, 160 * (charge ?? 0), 14);
   }
   ctx.textAlign = 'right'; ctx.fillStyle = '#222'; ctx.font = '12px ui-monospace, Menlo, monospace';
-  if (game.last) ctx.fillText(`last throw: power ${Math.round(Math.max(0, Math.min(1, game.last.power)) * 100)}%` + (game.last.peak ? ` (energy ${game.last.peak})` : ''), W - 12, 26);
+  if (game.last) ctx.fillText(`last throw: power ${Math.round(Math.max(0, Math.min(1, game.last.power)) * 100)}%` + (game.last.peak ? ` (energy ${game.last.peak})` : '')
+    + ` · arc ${Math.round(game.last.arc)}° · spin ${game.last.spinPct}%`, W - 12, 26);
   if (game.keyboard) ctx.fillText('KEYBOARD · NOT RANKED', W - 12, 44);
   ctx.textAlign = 'center';
   if (game.result) { ctx.fillStyle = game.result.in ? '#1a8f3a' : '#c0392b'; ctx.font = 'bold 34px ui-monospace, Menlo, monospace'; ctx.fillText(game.result.text, W / 2, 110); }

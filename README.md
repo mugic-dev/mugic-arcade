@@ -17,6 +17,7 @@ Browser games played with a MUGIC as the controller over Web Bluetooth. `index.h
 | Moon Lander (Lunar Lander) | `lander/` | **Roll** → turn rate, **pitch forward** → throttle (proportional); land on a pad upright and slow |
 | Grand Prix (Pole Position style) | `racer/` | **Roll** → steering (proportional), **pitch forward** → gas, **pitch back** → brake, **flick** shifts LO/HI. Auto-gear mode is practice only (not posted) |
 | Dragon Tower (Kung-Fu Master style) | `kungfu/` | **Roll** → walk speed; hold **pitch down** = crouch, **tip up** = jump; **flick** strikes (standing = punch, crouched = low kick, airborne = jump kick); when grabbed, 4 quick flicks shake them off. Keyboard play not posted |
+| Paper Toss | `toss/` | A throwing **flick** throws: **yaw** (just before) aims, **pitch** sets the arc (level 45° → tipped up 25° = 70° lob), **roll** puts curving spin on it, throw strength sets distance (`Full power at`; or `Power from: tilt`). Score = streak |
 | 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.
