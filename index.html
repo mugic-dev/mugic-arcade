@@ -56,17 +56,28 @@
 </div>
 <p class="help" style="max-width: 1040px">Scores are posted with three initials and the code of the MUGIC that played (connected over Bluetooth).</p>
 <script>
-Scores.top('invaders').then(rows => Scores.render(document.getElementById('invBoard'), rows));
-Scores.top('pacman').then(rows => Scores.render(document.getElementById('pacBoard'), rows));
-Scores.top('bricks').then(rows => Scores.render(document.getElementById('brkBoard'), rows));
-Scores.top('anteater').then(rows => Scores.render(document.getElementById('antBoard'), rows));
-Scores.top('asteroids').then(rows => Scores.render(document.getElementById('rockBoard'), rows));
-[['tetris', 'tetBoard'], ['galaga', 'galBoard'], ['centipede', 'cenBoard'], ['snake', 'snkBoard'], ['frogger', 'frgBoard'], ['lander', 'lndBoard'], ['racer', 'rcrBoard'], ['kungfu', 'kfBoard'], ['toss', 'tossBoard'], ['chopper', 'chopBoard']]
-  .forEach(([g, id]) => Scores.top(g).then(rows => Scores.render(document.getElementById(id), rows)));
-// level records: best (fewest moves) per Sokoban level
-Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(l => Scores.top('sokoban', { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))
-  .then(levels => Scores.render(document.getElementById('sokBoard'),
-    levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${i + 1} ${x.initials}` }))), ' moves'));
+const BOARDS = [['invaders', 'invBoard'], ['pacman', 'pacBoard'], ['bricks', 'brkBoard'], ['anteater', 'antBoard'], ['asteroids', 'rockBoard'],
+  ['tetris', 'tetBoard'], ['galaga', 'galBoard'], ['centipede', 'cenBoard'], ['snake', 'snkBoard'], ['frogger', 'frgBoard'],
+  ['lander', 'lndBoard'], ['racer', 'rcrBoard'], ['kungfu', 'kfBoard'], ['toss', 'tossBoard'], ['chopper', 'chopBoard']];
+function renderAll() {
+  BOARDS.forEach(([g, id]) => Scores.top(g).then(rows => Scores.render(document.getElementById(id), rows)));
+  // level records: best (fewest moves) per Sokoban level
+  Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(l => Scores.top('sokoban', { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))
+    .then(levels => Scores.render(document.getElementById('sokBoard'),
+      levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${i + 1} ${x.initials}` }))), ' moves'));
+}
+// Refresh right away when coming back to this page, and every 3 s while it's shown: a single cheap request for
+// the newest score's time, re-rendering all boards only when it changed.
+let newest;
+async function refresh(force) {
+  if (document.hidden) return;
+  const t = await Scores.latest();
+  if (force || t !== newest) { newest = t; renderAll(); }
+}
+refresh(true);
+setInterval(refresh, 3000);
+addEventListener('pageshow', e => { if (e.persisted) refresh(true); });
+document.addEventListener('visibilitychange', () => refresh());
 </script>
 <p class="help">Needs a MUGIC in BLE output mode (firmware ≥ 2.2.0) and Chrome or Edge. Every game also plays with the keyboard.</p>
 </body>

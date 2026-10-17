@@ -3,6 +3,7 @@
 //   Scores.top(game, { mode, level, lowerIsBetter, limit })  -> [{ initials, device, score, created_at }]
 //   Scores.render(el, rows, unit)  fills a table
 //   Scores.busy()  true while the initials dialog is open
+//   Scores.latest()  -> created_at of the newest score in any game (cheap change check), or null
 const Scores = (() => {
   const enabled = () => typeof SUPABASE_URL === 'string' && SUPABASE_URL && SUPABASE_ANON_KEY;
   const headers = () => ({ apikey: SUPABASE_ANON_KEY, Authorization: 'Bearer ' + SUPABASE_ANON_KEY, 'Content-Type': 'application/json' });
@@ -14,6 +15,13 @@ const Scores = (() => {
     q.set('level', level == null ? 'is.null' : 'eq.' + level);
     const r = await fetch(`${SUPABASE_URL}/rest/v1/scores?${q}`, { headers: headers() });
     return r.ok ? r.json() : [];
+  }
+
+  async function latest() {
+    if (!enabled()) return null;
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/scores?select=created_at&order=created_at.desc&limit=1`, { headers: headers() }).catch(() => null);
+    const rows = r && r.ok ? await r.json() : [];
+    return rows.length ? rows[0].created_at : null;
   }
 
   // Arcade-style three-letter entry; resolves to 'ABC' or null if cancelled.
@@ -70,5 +78,5 @@ const Scores = (() => {
 
   const busy = () => !!document.querySelector('.sc-dialog');   // initials entry open: games ignore input
 
-  return { enabled, top, submit, render, busy };
+  return { enabled, top, latest, submit, render, busy };
 })();
