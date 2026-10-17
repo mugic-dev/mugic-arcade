@@ -9,13 +9,13 @@ It is served by GitHub Pages straight from `main` (repo root): a push to `main` 
 
 | Game | Folder | Controls |
 |---|---|---|
-| Invaders | `invaders/` | **Roll** → cannon speed, like a proportional joystick (`Full speed at` = roll for max speed, default 15°); **flick** fires |
+| Alien Attack | `invaders/` | **Roll** → cannon speed, like a proportional joystick (`Full speed at` = roll for max speed, default 15°); **flick** fires |
 | Muncher (Pac-Man style) | `pacman/` | **Roll** → left/right, **pitch** → up/down, like a proportional joystick: the dominant axis picks the direction, its tilt the speed (`Full speed at`, default 15°; level = stop); early turns are taken at the next opening |
-| Wall Breaker (Breakout style) | `bricks/` | **Roll** → paddle speed, like Invaders (`Full speed at`, default 15°); **flick** launches; hit position on the paddle sets the angle |
+| Wall Breaker (Breakout style) | `bricks/` | **Roll** → paddle speed, like Alien Attack (`Full speed at`, default 15°); **flick** launches; hit position on the paddle sets the angle |
 | Anteater (after Stern/Tago, 1982) | `anteater/` | **Roll** / **pitch** steer the tongue tip like a proportional joystick (dominant axis, tilt = speed); steering back along the tongue retracts it; **flick** snaps it back |
 | Space Rocks (Asteroids style) | `asteroids/` | **Roll** → turn rate, **pitch forward** → thrust (both proportional, `Full turn/thrust at`, default 15°); **flick** fires; hyperspace on H (keyboard) |
-| Falling Blocks (Tetris style) | `tetris/` | **Roll** → slide, repeating faster with more tilt; **pitch forward** → soft drop; **flick** rotates |
-| Star Swarm (Galaga style) | `galaga/` | **Roll** → fighter speed (like Invaders); **flick** fires (2 shots max) |
+| Falling Blocks | `tetris/` | **Roll** → slide, repeating faster with more tilt; **pitch forward** → soft drop; **flick** rotates |
+| Star Swarm (Galaga style) | `galaga/` | **Roll** → fighter speed (like Alien Attack); **flick** fires (2 shots max) |
 | Bug Blaster (Centipede style) | `centipede/` | **Roll** / **pitch** → shooter velocity in the bottom zone (proportional joystick); automatic fire |
 | Snake | `snake/` | **Roll** / **pitch** past `Turn at` (8°) turns (dominant axis, 1.4× to switch); constant speed |
 | Road Hopper (Frogger style) | `frogger/` | One **flick** = one hop; direction = axis that turned most (**yaw** left/right, **pitch** up/down), snap-back ignored, as in Warehouse |
@@ -63,7 +63,7 @@ Warehouse levels are original and were checked solvable with a BFS solver.
 ## Global scoreboard (Supabase)
 
 Scores are posted with three initials plus the MUGIC's device code (last 6 hex of its label MAC, read over
-Bluetooth from `GetConfiguration`), and only while a MUGIC is connected. Invaders: highest score. Warehouse: Hard mode
+Bluetooth from `GetConfiguration`), and only while a MUGIC is connected. Alien Attack: highest score. Warehouse: Hard mode
 only, fewest moves per level. This is a page-side check — it stops casual fakes, not someone calling the API directly;
 device-signed scores (firmware challenge/response) are the planned follow-up.
 

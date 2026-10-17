@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MUGIC Invaders</title>
+<title>MUGIC Alien Attack</title>
 <link rel="stylesheet" href="../common/arcade.css">
 </head>
 <body>
-<h1>MUGIC INVADERS</h1>
+<h1>ALIEN ATTACK</h1>
 <a class="back" href="../">← arcade</a>
 <div id="bar"></div>
 <canvas id="game" width="640" height="560"></canvas>
@@ -236,7 +236,7 @@ function draw() {
 
   ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
   if (game.state === 'title') {
-    ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('MUGIC INVADERS', W / 2, 180);
+    ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('ALIEN ATTACK', W / 2, 180);
     ctx.font = '16px ui-monospace, Menlo, monospace';
     [['squid', 30], ['crab', 20], ['octo', 10]].forEach(([t, p], i) => {
       drawSprite(t, W / 2 - 80, 240 + i * 40, 4, 0); ctx.fillStyle = '#fff'; ctx.fillText('= ' + p + ' PTS', W / 2 + 20, 258 + i * 40);

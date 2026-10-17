@@ -1,12 +1,12 @@
 // The arcade's games, in menu order: folder/scoreboard id, display name, one-line blurb.
 // board: heading for its scores (default 'TOP 10'); levels: per-level records (fewest moves, hard mode).
 const GAMES = [
-  { id: 'invaders', name: 'Invaders', blurb: 'Roll to steer the cannon, flick to fire.' },
+  { id: 'invaders', name: 'Alien Attack', blurb: 'Roll to steer the cannon, flick to fire.' },
   { id: 'pacman', name: 'Muncher', blurb: 'Pac-Man-style maze: roll and pitch steer like a joystick, tilt sets speed.' },
   { id: 'bricks', name: 'Wall Breaker', blurb: 'Roll steers the paddle like a joystick, flick launches the ball.' },
   { id: 'anteater', name: 'Anteater', blurb: 'Steer the tongue through the anthill with roll and pitch, flick to pull it back.' },
   { id: 'asteroids', name: 'Space Rocks', blurb: 'Asteroids-style: roll to turn, tip forward to thrust, flick to fire.' },
-  { id: 'tetris', name: 'Falling Blocks', blurb: 'Tetris-style: roll slides, tip forward drops, flick rotates.' },
+  { id: 'tetris', name: 'Falling Blocks', blurb: 'Stack the falling blocks: roll slides, tip forward drops, flick rotates.' },
   { id: 'galaga', name: 'Star Swarm', blurb: 'Galaga-style: roll steers the fighter, flick fires at the diving swarm.' },
   { id: 'centipede', name: 'Bug Blaster', blurb: 'Centipede-style: roll and pitch steer the shooter, auto-fire.' },
   { id: 'snake', name: 'Snake', blurb: "Tilt to turn; eat, grow, don't bite yourself." },
