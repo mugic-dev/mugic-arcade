@@ -16,5 +16,5 @@ const GAMES = [
   { id: 'kungfu', name: 'Dragon Tower', blurb: 'Kung-Fu Master-style: roll walks, tip down crouch / up jump, flick strikes, shake off grabbers.' },
   { id: 'toss', name: 'Paper Toss', blurb: 'Throw for real: point to aim, tip up to lob, twist for spin, throw harder to go further.', board: 'LONGEST STREAK' },
   { id: 'chopper', name: 'Rescue Chopper', blurb: 'Choplifter-style: roll and pitch fly, hover to bomb, flick fires; land to rescue hostages.' },
-  { id: 'sokoban', name: '倉庫番 Sōkoban', short: 'SŌKOBAN HARD', blurb: 'Flick left/right/up/down to step and push crates, undo with a button.', board: 'LEVEL RECORDS', levels: 8 },
+  { id: 'sokoban', name: '倉庫番 Sōkoban', short: 'SŌKOBAN HARD', blurb: 'Flick left/right/up/down to step and push crates, undo with a button.', board: 'LEVEL RECORDS', levels: 25 },
 ];
