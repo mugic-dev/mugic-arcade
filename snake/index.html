@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Snake</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>SNAKE</h1>
+<div id="bar"></div>
+<canvas id="game" width="528" height="484"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Tilt to turn: roll right/left, pitch up/down. The
+  snake never stops; hold the MUGIC level to keep going straight. Eat food, don't hit the walls or yourself.
+  Keyboard: arrows, Enter start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+// A tilt past TURN_AT degrees asks for that direction; the dominant of roll/pitch wins, and the
+// other axis must be SWITCH_RATIO times larger to take over (a diagonal tilt doesn't flicker).
+const SWITCH_RATIO = 1.4;
+let turnAt = 8;
+try { turnAt = +localStorage.getItem('mugicSnakeTurn') || 8; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Turn at', `<input type="range" id="turn" min="3" max="30" value="${turnAt}">`, 'turnVal']],
+});
+$('turnVal').textContent = turnAt + '°';
+$('turn').oninput = e => {
+  turnAt = +e.target.value; $('turnVal').textContent = turnAt + '°';
+  try { localStorage.setItem('mugicSnakeTurn', turnAt); } catch (e) {}
+};
+
+const COLS = 24, ROWS = 20, C = 22, TOP = 44;
+const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
+const game = { state: 'title', score: 0, hi: 0 };
+try { game.hi = +localStorage.getItem('mugicSnakeHi') || 0; } catch (e) {}
+let stickAxis = 'roll';
+
+function newGame() {
+  game.snake = [[8, 10], [7, 10], [6, 10]]; game.dir = DIRS.right; game.queue = [];
+  game.score = 0; game.eaten = 0; game.step = 0.14; game.acc = 0; game.state = 'play';
+  placeFood();
+}
+
+function placeFood() {
+  do { game.food = [Math.floor(Math.random() * COLS), Math.floor(Math.random() * ROWS)]; }
+  while (game.snake.some(([x, y]) => x === game.food[0] && y === game.food[1]));
+}
+
+// Turns are queued (two at most) so quick successive turns are not lost; reversing is ignored.
+function want(d) {
+  const lastDir = game.queue.length ? game.queue[game.queue.length - 1] : game.dir;
+  if (d === lastDir || (d[0] === -lastDir[0] && d[1] === -lastDir[1]) || game.queue.length >= 2) return;
+  game.queue.push(d);
+}
+
+function mugicDir() {
+  if (!Mugic.connected) return null;
+  const other = stickAxis === 'roll' ? 'pitch' : 'roll';
+  if (Math.abs(Mugic[other]) > SWITCH_RATIO * Math.abs(Mugic[stickAxis])) stickAxis = other;
+  const v = Mugic[stickAxis];
+  if (Math.abs(v) < turnAt) return null;
+  return stickAxis === 'roll' ? (v > 0 ? DIRS.right : DIRS.left) : (v > 0 ? DIRS.up : DIRS.down);
+}
+
+function update(dt) {
+  const d = mugicDir();
+  if (d) want(d);
+  game.acc += dt;
+  while (game.acc >= game.step && game.state === 'play') { game.acc -= game.step; tick(); }
+}
+
+function tick() {
+  if (game.queue.length) game.dir = game.queue.shift();
+  const [hx, hy] = game.snake[0], nx = hx + game.dir[0], ny = hy + game.dir[1];
+  const ate = nx === game.food[0] && ny === game.food[1];
+  const body = ate ? game.snake : game.snake.slice(0, -1);      // the tail moves away unless we grow
+  if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || body.some(([x, y]) => x === nx && y === ny)) { endGame(); return; }
+  game.snake.unshift([nx, ny]);
+  if (ate) {
+    ++game.eaten; game.score += 10 + Math.floor(game.eaten / 5) * 5;
+    game.step = Math.max(0.06, game.step * 0.97);
+    placeFood();
+  } else game.snake.pop();
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicSnakeHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'snake', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('snake').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => { if (!Scores.busy() && (game.state === 'title' || game.state === 'over')) newGame(); };
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
+  if (d) { if (game.state === 'play') want(DIRS[d]); e.preventDefault(); }
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+
+const cv = $('game'), ctx = cv.getContext('2d');
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText('SCORE ' + game.score, 10, 28);
+  ctx.textAlign = 'right'; ctx.fillText('HI ' + game.hi, cv.width - 10, 28);
+  ctx.fillStyle = '#0b0e15'; ctx.fillRect(0, TOP, COLS * C, ROWS * C);
+  ctx.strokeStyle = '#2a3040'; ctx.strokeRect(0.5, TOP + 0.5, COLS * C - 1, ROWS * C - 1);
+  ctx.textAlign = 'center';
+  if (game.state === 'title') {
+    ctx.fillStyle = '#4dff88'; ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('SNAKE', cv.width / 2, TOP + 200);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', cv.width / 2, TOP + 240);
+    return;
+  }
+  const [fx, fy] = game.food;
+  ctx.fillStyle = '#ff4d4d'; ctx.beginPath(); ctx.arc(fx * C + C / 2, TOP + fy * C + C / 2, C * 0.35, 0, Math.PI * 2); ctx.fill();
+  game.snake.forEach(([x, y], i) => {
+    ctx.fillStyle = i === 0 ? '#b8ffcf' : i % 2 ? '#4dff88' : '#3fd877';
+    ctx.fillRect(x * C + 1, TOP + y * C + 1, C - 2, C - 2);
+  });
+  const [hx, hy] = game.snake[0], [dx, dy] = game.dir;
+  ctx.fillStyle = '#000';
+  for (const s of [-1, 1]) ctx.fillRect(hx * C + C / 2 - 2 + dx * 4 + dy * s * 5, TOP + hy * C + C / 2 - 2 + dy * 4 + dx * s * 5, 4, 4);
+  if (game.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, TOP + 170, cv.width, 80);
+    ctx.fillStyle = '#ff5a5a'; ctx.font = '30px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', cv.width / 2, TOP + 212);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', cv.width / 2, TOP + 238);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

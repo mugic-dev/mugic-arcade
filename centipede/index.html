@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Bug Blaster</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>BUG BLASTER</h1>
+<div id="bar"></div>
+<canvas id="game" width="480" height="544"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll and pitch steer the shooter around the bottom
+  zone like a joystick (the further you tilt, the faster). It fires automatically. Shoot the centipede (each hit leaves a
+  mushroom and splits it), the spider and the fleas. Keyboard: arrows, Enter start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 2, SPEED = 260;                // degrees counted as center; px/s at full tilt
+let range = 15;
+try { range = +localStorage.getItem('mugicBugRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicBugRange', range); } catch (e) {}
+};
+
+// ---------- Field ----------
+const COLS = 30, ROWS = 32, C = 16, TOP = 32, ZONE = 26;   // rows >= ZONE are the player's zone
+const W = COLS * C, H = TOP + ROWS * C;
+const game = { state: 'title', score: 0, hi: 0, lives: 3, wave: 0 };
+try { game.hi = +localStorage.getItem('mugicBugHi') || 0; } catch (e) {}
+const keys = {};
+const mkey = (x, y) => y * COLS + x;
+
+function newGame() {
+  game.score = 0; game.lives = 3; game.wave = 0; game.nextLife = 12000;
+  game.mush = new Map();                           // key -> hits left (4 = whole)
+  for (let i = 0; i < 45; ++i) {
+    const x = Math.floor(Math.random() * COLS), y = 1 + Math.floor(Math.random() * (ZONE - 2));
+    game.mush.set(mkey(x, y), 4);
+  }
+  game.state = 'play'; newShooter(); nextWave();
+}
+
+function newShooter() {
+  game.player = { x: W / 2, y: TOP + (ROWS - 2) * C + C / 2 };
+  game.bullet = null; game.spider = null; game.flea = null; game.spiderTimer = 4;
+}
+
+// The centipede: a chain of segments, each moving one cell per tick. Heads lead; a hit splits the chain.
+function nextWave() {
+  ++game.wave;
+  const n = 12;
+  game.segs = [];
+  for (let i = 0; i < n; ++i) game.segs.push({ x: COLS / 2 + i, y: 0, dir: -1, down: 1, head: i === 0 });
+  game.tickTime = Math.max(0.035, 0.09 - 0.006 * (game.wave - 1));   // seconds per cell game.tick = 0;
+}
+
+function addScore(n) {
+  game.score += n;
+  if (game.score >= game.nextLife) { ++game.lives; game.nextLife += 12000; }
+}
+
+// Segments follow the head in front of them: each moves where the one ahead was. Heads steer:
+// at an edge or a mushroom they drop (or rise inside the player zone) and reverse.
+function stepCentipede() {
+  const segs = game.segs;
+  const prev = segs.map(s => ({ x: s.x, y: s.y, dir: s.dir, down: s.down }));
+  segs.forEach((s, i) => {
+    if (!s.head) { Object.assign(s, prev[i - 1]); return; }
+    const nx = s.x + s.dir;
+    if (nx < 0 || nx >= COLS || game.mush.has(mkey(nx, s.y))) {
+      if (s.y + s.down >= ROWS || s.y + s.down < ZONE - 1 && s.down < 0) s.down = -s.down;
+      s.y += s.down; s.dir = -s.dir;
+      if (s.y >= ROWS - 1) s.down = -1;
+    } else s.x = nx;
+  });
+}
+
+function update(dt) {
+  const p = game.player;
+  if (p && !game.dying) {
+    const ax = keys.ArrowLeft ? -1 : keys.ArrowRight ? 1 : Mugic.connected && Math.abs(Mugic.roll) > DEADZONE ? Math.max(-1, Math.min(1, Mugic.roll / range)) : 0;
+    const ay = keys.ArrowUp ? -1 : keys.ArrowDown ? 1 : Mugic.connected && Math.abs(Mugic.pitch) > DEADZONE ? Math.max(-1, Math.min(1, -Mugic.pitch / range)) : 0;
+    // move each axis separately so the shooter slides along mushrooms instead of sticking
+    const blocked = (x, y) => game.mush.has(mkey(Math.floor(x / C), Math.floor((y - TOP) / C)));
+    const nx = Math.max(C / 2, Math.min(W - C / 2, p.x + ax * SPEED * dt));
+    if (!blocked(nx, p.y)) p.x = nx;
+    const ny = Math.max(TOP + ZONE * C + C / 2, Math.min(H - C / 2, p.y + ay * SPEED * dt));
+    if (!blocked(p.x, ny)) p.y = ny;
+    if (!game.bullet) game.bullet = { x: p.x, y: p.y - 8 };   // automatic fire, one shot at a time
+  }
+
+  if (game.bullet) {
+    const b = game.bullet;
+    for (let s = 0; s < 6 && game.bullet; ++s) { b.y -= 1500 * dt / 6; bulletHits(b); }
+    if (game.bullet && b.y < TOP) game.bullet = null;
+  }
+
+  game.tick += dt;
+  while (game.tick >= game.tickTime) { game.tick -= game.tickTime; stepCentipede(); }
+  updateSpider(dt); updateFlea(dt);
+
+  if (p && !game.dying) {
+    const touch = o => o && Math.abs(o.x - p.x) < C * 0.8 && Math.abs(o.y - p.y) < C * 0.8;
+    if (game.segs.some(s => touch({ x: s.x * C + C / 2, y: TOP + s.y * C + C / 2 })) || touch(game.spider) || touch(game.flea)) die();
+  }
+  if (!game.segs.length && game.state === 'play') nextWave();
+  if (game.dying && (game.dying -= dt) <= 0) respawn();
+}
+
+function bulletHits(b) {
+  const cx = Math.floor(b.x / C), cy = Math.floor((b.y - TOP) / C);
+  const i = game.segs.findIndex(s => s.x === cx && s.y === cy);
+  if (i >= 0) {
+    const s = game.segs[i];
+    addScore(s.head ? 100 : 10);
+    game.mush.set(mkey(s.x, s.y), 4);
+    game.segs.splice(i, 1);
+    if (game.segs[i] && !game.segs[i].head) game.segs[i].head = true;   // the segment behind becomes a head
+    game.bullet = null; return;
+  }
+  const k = mkey(cx, cy);
+  if (game.mush.has(k)) {
+    const left = game.mush.get(k) - 1;
+    if (left <= 0) { game.mush.delete(k); addScore(1); } else game.mush.set(k, left);
+    game.bullet = null; return;
+  }
+  for (const [o, pts] of [[game.spider, null], [game.flea, 200]]) {
+    if (o && Math.abs(o.x - b.x) < C && Math.abs(o.y - b.y) < C) {
+      const d = Math.abs(o.y - game.player.y);
+      addScore(pts || (d < 2 * C ? 900 : d < 4 * C ? 600 : 300));   // the closer the spider, the more it's worth
+      if (o === game.spider) game.spider = null; else game.flea = null;
+      game.bullet = null; return;
+    }
+  }
+}
+
+// The spider zig-zags through the player zone eating mushrooms; the flea drops straight down
+// (leaving mushrooms) when the player zone has few of them.
+function updateSpider(dt) {
+  if (!game.spider) {
+    if ((game.spiderTimer -= dt) <= 0) {
+      const left = Math.random() < 0.5;
+      game.spider = { x: left ? 0 : W, y: TOP + (ZONE - 2) * C, vx: (left ? 1 : -1) * (70 + 10 * game.wave), vy: 120 };
+    }
+    return;
+  }
+  const s = game.spider;
+  s.x += s.vx * dt; s.y += s.vy * dt;
+  if (s.y < TOP + (ZONE - 2) * C || s.y > H - C / 2) { s.vy = -s.vy; s.y = Math.max(TOP + (ZONE - 2) * C, Math.min(H - C / 2, s.y)); }
+  if (Math.random() < dt * 0.8) s.vy = -s.vy;
+  game.mush.delete(mkey(Math.floor(s.x / C), Math.floor((s.y - TOP) / C)));
+  if (s.x < -C || s.x > W + C) { game.spider = null; game.spiderTimer = 3 + Math.random() * 4; }
+}
+
+function updateFlea(dt) {
+  if (!game.flea) {
+    let inZone = 0;
+    game.mush.forEach((_, k) => { if (Math.floor(k / COLS) >= ZONE - 6) ++inZone; });
+    if (inZone < 5 && game.wave > 1 && Math.random() < dt * 0.5) game.flea = { x: (Math.floor(Math.random() * COLS) + 0.5) * C, y: TOP, row: -1 };
+    return;
+  }
+  const f = game.flea;
+  f.y += 300 * dt;
+  const row = Math.floor((f.y - TOP) / C);
+  if (row !== f.row) { f.row = row; if (row < ZONE && Math.random() < 0.3) game.mush.set(mkey(Math.floor(f.x / C), row), 4); }
+  if (f.y > H) game.flea = null;
+}
+
+function die() {
+  game.dying = 1.5; game.bullet = null;
+  --game.lives;
+}
+
+function respawn() {
+  game.dying = 0;
+  if (game.lives <= 0) { endGame(); return; }
+  game.mush.forEach((v, k) => { if (v < 4) { game.mush.set(k, 4); addScore(5); } });   // damaged mushrooms restored
+  // the centipede restarts from the top
+  const n = game.segs.length;
+  game.segs = [];
+  for (let i = 0; i < n; ++i) game.segs.push({ x: COLS / 2 + i, y: 0, dir: -1, down: 1, head: i === 0 });
+  newShooter();
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicBugHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'centipede', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('centipede').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => { if (!Scores.busy() && (game.state === 'title' || game.state === 'over')) newGame(); };
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Drawing ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const PALETTE = ['#ff4d4d', '#4dff88', '#ffe14d', '#3ff0ff', '#ff6bd6', '#ff9f3a'];
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText(String(game.score), 10, 22);
+  ctx.textAlign = 'center'; ctx.fillText('HI ' + game.hi, W / 2, 22);
+  ctx.textAlign = 'right'; ctx.fillText('♦'.repeat(Math.max(0, game.lives)), W - 10, 22);
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#4dff88'; ctx.font = '34px ui-monospace, Menlo, monospace'; ctx.fillText('BUG BLASTER', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, H / 2 + 20);
+    return;
+  }
+  const col = PALETTE[(game.wave - 1) % PALETTE.length], col2 = PALETTE[game.wave % PALETTE.length];
+  ctx.strokeStyle = '#1d2230'; ctx.beginPath(); ctx.moveTo(0, TOP + ZONE * C); ctx.lineTo(W, TOP + ZONE * C); ctx.stroke();
+  game.mush.forEach((hits, k) => {
+    const x = (k % COLS) * C, y = TOP + Math.floor(k / COLS) * C, h = hits / 4;
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x + C / 2, y + C / 2, C * 0.45, Math.PI, 0); ctx.fill();
+    ctx.fillStyle = col2; ctx.fillRect(x + C * 0.35, y + C / 2, C * 0.3, C * 0.4 * h);
+    if (hits < 4) { ctx.fillStyle = '#000'; ctx.fillRect(x, y, C, C * (1 - h) * 0.5); }
+  });
+  game.segs.forEach(s => {
+    const x = s.x * C + C / 2, y = TOP + s.y * C + C / 2;
+    ctx.fillStyle = s.head ? '#ff4d4d' : '#4dff88'; ctx.beginPath(); ctx.arc(x, y, C * 0.45, 0, Math.PI * 2); ctx.fill();
+    if (s.head) { ctx.fillStyle = '#000'; ctx.fillRect(x + s.dir * 3 - 1, y - 3, 2, 2); }
+  });
+  if (game.spider) { const s = game.spider; ctx.strokeStyle = '#c05cff'; ctx.lineWidth = 2; ctx.beginPath();
+    for (const k of [-1, 1]) for (let i = 0; i < 3; ++i) { ctx.moveTo(s.x, s.y); ctx.lineTo(s.x + k * 10, s.y - 6 + i * 6); }
+    ctx.stroke(); ctx.fillStyle = '#c05cff'; ctx.beginPath(); ctx.arc(s.x, s.y, 6, 0, Math.PI * 2); ctx.fill(); }
+  if (game.flea) { ctx.fillStyle = '#ffe14d'; ctx.fillRect(game.flea.x - 5, game.flea.y - 6, 10, 12); }
+  if (game.bullet) { ctx.fillStyle = '#fff'; ctx.fillRect(game.bullet.x - 1, game.bullet.y - 6, 2, 8); }
+  const p = game.player;
+  if (p && !(game.dying && Math.floor(game.dying * 8) % 2)) {
+    ctx.fillStyle = '#ffe14d'; ctx.beginPath(); ctx.moveTo(p.x, p.y - 8); ctx.lineTo(p.x + 7, p.y + 7); ctx.lineTo(p.x - 7, p.y + 7); ctx.closePath(); ctx.fill();
+  }
+  if (game.state === 'over') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ff5a5a'; ctx.font = '30px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', W / 2, H / 2);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', W / 2, H / 2 + 28);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

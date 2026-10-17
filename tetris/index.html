@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Falling Blocks</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>FALLING BLOCKS</h1>
+<div id="bar"></div>
+<canvas id="game" width="420" height="520"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll slides the piece left/right (the further you
+  roll, the faster it repeats), tip forward (pitch down) to drop faster, flick to rotate. Keyboard: ← → move, ↑ or X rotate,
+  Z rotate back, ↓ soft drop, space hard drop, Enter start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const ROLL_DEADZONE = 3, PITCH_DEADZONE = 5;   // degrees that still count as center
+const SHIFT_MAX = 12, SOFT_DROP_MAX = 25;      // cells/s at full tilt
+let range = 15;
+try { range = +localStorage.getItem('mugicBlocksRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → ↑ ↓ space',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicBlocksRange', range); } catch (e) {}
+};
+
+// ---------- Pieces ----------
+const COLS = 10, ROWS = 20, C = 24, BX = 16, BY = 16;
+const SHAPES = {
+  I: [[0, 1], [1, 1], [2, 1], [3, 1]], O: [[1, 0], [2, 0], [1, 1], [2, 1]], T: [[1, 0], [0, 1], [1, 1], [2, 1]],
+  S: [[1, 0], [2, 0], [0, 1], [1, 1]], Z: [[0, 0], [1, 0], [1, 1], [2, 1]], J: [[0, 0], [0, 1], [1, 1], [2, 1]],
+  L: [[2, 0], [0, 1], [1, 1], [2, 1]],
+};
+const COLORS = { I: '#3ff0ff', O: '#ffe14d', T: '#c05cff', S: '#4dff88', Z: '#ff4d4d', J: '#4d7bff', L: '#ff9f3a' };
+const BOX = { I: 4, O: 4 };                      // rotation box size (3 otherwise)
+
+// rotate cells inside the piece's box; dir 1 = clockwise
+const rotated = (p, dir) => {
+  const n = BOX[p.type] || 3;
+  return p.type === 'O' ? p.cells : p.cells.map(([x, y]) => dir > 0 ? [n - 1 - y, x] : [y, n - 1 - x]);
+};
+
+// ---------- Game state ----------
+const game = { state: 'title', score: 0, hi: 0, lines: 0, level: 1 };
+try { game.hi = +localStorage.getItem('mugicBlocksHi') || 0; } catch (e) {}
+const keys = {};
+const input = { rotate: 0, hardDrop: false };
+let bag = [];
+const nextType = () => { if (!bag.length) bag = Object.keys(SHAPES).sort(() => Math.random() - 0.5); return bag.pop(); };
+
+function newGame() {
+  game.grid = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+  game.score = 0; game.lines = 0; game.level = 1; bag = [];
+  game.next = nextType(); spawn(); game.state = 'play';
+}
+
+function spawn() {
+  const type = game.next; game.next = nextType();
+  game.piece = { type, cells: SHAPES[type].map(c => c.slice()), x: 3, y: type === 'I' ? -1 : 0 };
+  game.fall = 0; game.lock = 0; game.shiftAcc = 1; game.dropAcc = 0;
+  if (!fits(game.piece.cells, game.piece.x, game.piece.y)) endGame();
+}
+
+const fits = (cells, px, py) => cells.every(([x, y]) => {
+  const gx = px + x, gy = py + y;
+  return gx >= 0 && gx < COLS && gy < ROWS && (gy < 0 || !game.grid[gy][gx]);
+});
+
+const move = (dx, dy) => {
+  const p = game.piece;
+  if (!fits(p.cells, p.x + dx, p.y + dy)) return false;
+  p.x += dx; p.y += dy;
+  if (dy === 0) game.lock = 0;                    // sliding resets the lock delay
+  return true;
+};
+
+function rotate(dir) {
+  const p = game.piece, cells = rotated(p, dir);
+  for (const [kx, ky] of [[0, 0], [-1, 0], [1, 0], [-2, 0], [2, 0], [0, -1]]) {   // simple wall kicks
+    if (fits(cells, p.x + kx, p.y + ky)) { p.cells = cells; p.x += kx; p.y += ky; game.lock = 0; return; }
+  }
+}
+
+function lockPiece() {
+  const p = game.piece;
+  for (const [x, y] of p.cells) { if (p.y + y < 0) { endGame(); return; } game.grid[p.y + y][p.x + x] = p.type; }
+  const full = game.grid.map((r, i) => r.every(Boolean) ? i : -1).filter(i => i >= 0);
+  if (full.length) {
+    game.grid = game.grid.filter((_, i) => !full.includes(i));
+    while (game.grid.length < ROWS) game.grid.unshift(Array(COLS).fill(null));
+    game.score += [0, 100, 300, 500, 800][full.length] * game.level;
+    game.lines += full.length;
+    game.level = 1 + Math.floor(game.lines / 10);
+    game.flash = { rows: full, t: 0.25 };
+  }
+  spawn();
+}
+
+const gravity = () => Math.max(0.05, 0.8 - 0.07 * (game.level - 1));   // seconds per row
+
+function update(dt) {
+  if (game.flash && (game.flash.t -= dt) <= 0) game.flash = null;
+  if (input.rotate) { rotate(input.rotate); input.rotate = 0; }
+  if (input.hardDrop) { while (move(0, 1)) game.score += 2; input.hardDrop = false; lockPiece(); return; }
+
+  // horizontal: MUGIC roll repeats at a rate proportional to tilt (first step right away); keys at full rate
+  const roll = keys.ArrowLeft ? -range : keys.ArrowRight ? range : Mugic.connected ? Mugic.roll : 0;
+  if (Math.abs(roll) > ROLL_DEADZONE) {
+    game.shiftAcc += Math.min(1, Math.abs(roll) / range) * SHIFT_MAX * dt;
+    while (game.shiftAcc >= 1) { move(Math.sign(roll), 0); --game.shiftAcc; }
+  } else game.shiftAcc = 1;
+
+  // soft drop: pitch forward (down) or ↓
+  const fwd = keys.ArrowDown ? range : Mugic.connected ? -Mugic.pitch : 0;
+  if (fwd > PITCH_DEADZONE) {
+    game.dropAcc += Math.min(1, fwd / range) * SOFT_DROP_MAX * dt;
+    while (game.dropAcc >= 1) { if (move(0, 1)) ++game.score; --game.dropAcc; }
+  } else game.dropAcc = 0;
+
+  game.fall += dt;
+  while (game.fall >= gravity()) { game.fall -= gravity(); move(0, 1); }
+  if (!fits(game.piece.cells, game.piece.x, game.piece.y + 1)) {
+    if ((game.lock += dt) >= 0.5) lockPiece();
+  } else game.lock = 0;
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicBlocksHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'tetris', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('tetris').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'title' || game.state === 'over') newGame();
+  else input.rotate = 1;
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (game.state === 'play') {
+    if (e.code === 'ArrowUp' || e.code === 'KeyX') input.rotate = 1;
+    if (e.code === 'KeyZ') input.rotate = -1;
+    if (e.code === 'Space') input.hardDrop = true;
+  }
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Drawing ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+
+function cell(x, y, color) {
+  ctx.fillStyle = color; ctx.fillRect(x + 1, y + 1, C - 2, C - 2);
+  ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(x + 1, y + 1, C - 2, 3);
+}
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.strokeStyle = '#2a3040'; ctx.strokeRect(BX - 1, BY - 1, COLS * C + 2, ROWS * C + 2);
+  const sx = BX + COLS * C + 24;
+  ctx.fillStyle = '#fff'; ctx.font = '15px ui-monospace, Menlo, monospace'; ctx.textAlign = 'left';
+  [['SCORE', game.score], ['HI', game.hi], ['LINES', game.lines], ['LEVEL', game.level]].forEach(([k, v], i) => {
+    ctx.fillStyle = '#7a8499'; ctx.fillText(k, sx, 40 + i * 52); ctx.fillStyle = '#fff'; ctx.fillText(String(v), sx, 60 + i * 52);
+  });
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe14d'; ctx.font = '24px ui-monospace, Menlo, monospace';
+    ctx.fillText('FALLING', BX + COLS * C / 2, 220); ctx.fillText('BLOCKS', BX + COLS * C / 2, 252);
+    ctx.fillStyle = '#fff'; ctx.font = '13px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR ENTER', BX + COLS * C / 2, 300);
+    return;
+  }
+  ctx.fillStyle = '#7a8499'; ctx.fillText('NEXT', sx, 260);
+  SHAPES[game.next].forEach(([x, y]) => cell(sx + x * C, 276 + y * C, COLORS[game.next]));
+
+  game.grid.forEach((r, y) => r.forEach((t, x) => { if (t) cell(BX + x * C, BY + y * C, COLORS[t]); }));
+  if (game.flash) { ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(BX, BY, COLS * C, ROWS * C); }
+  const p = game.piece;
+  if (p && game.state === 'play') {
+    let gy = p.y; while (fits(p.cells, p.x, gy + 1)) ++gy;       // ghost: where it will land
+    ctx.strokeStyle = COLORS[p.type];
+    p.cells.forEach(([x, y]) => { if (gy + y >= 0) ctx.strokeRect(BX + (p.x + x) * C + 2, BY + (gy + y) * C + 2, C - 4, C - 4); });
+    p.cells.forEach(([x, y]) => { if (p.y + y >= 0) cell(BX + (p.x + x) * C, BY + (p.y + y) * C, COLORS[p.type]); });
+  }
+  if (game.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(BX, 210, COLS * C, 80);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ff5a5a'; ctx.font = '24px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', BX + COLS * C / 2, 248);
+    ctx.fillStyle = '#fff'; ctx.font = '12px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', BX + COLS * C / 2, 272);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

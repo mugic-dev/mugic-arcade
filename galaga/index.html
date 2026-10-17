@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Star Swarm</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>STAR SWARM</h1>
+<div id="bar"></div>
+<canvas id="game" width="480" height="580"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll steers the fighter like a joystick (the further,
+  the faster), flick to fire (two shots at a time). The swarm flies in, forms up, then dives at you. Bosses take two hits.
+  Keyboard: ← → move, space fire, Enter start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 2, SPEED = 320, KEY_SPEED = 280;
+let range = 15;
+try { range = +localStorage.getItem('mugicSwarmRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → space',
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicSwarmRange', range); } catch (e) {}
+};
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, TOP = 30, SHIP_Y = H - 50;
+// formation: 4 bosses, 2 rows of 8 butterflies, 2 rows of 10 bees
+const KINDS = {
+  boss:      { color: '#4dff88', hit: '#6b7bff', pts: [150, 400], hp: 2 },
+  butterfly: { color: '#ff4d4d', pts: [80, 160], hp: 1 },
+  bee:       { color: '#ffe14d', pts: [50, 100], hp: 1 },
+};
+const ROWS = [['boss', 4], ['butterfly', 8], ['butterfly', 8], ['bee', 10], ['bee', 10]];
+
+const game = { state: 'title', score: 0, hi: 0, lives: 3, stage: 0 };
+try { game.hi = +localStorage.getItem('mugicSwarmHi') || 0; } catch (e) {}
+const keys = {};
+const input = { fire: false };
+const stars = Array.from({ length: 70 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: 20 + Math.random() * 60 }));
+
+function newGame() { game.score = 0; game.lives = 3; game.stage = 0; game.nextLife = 20000; game.state = 'play'; newShip(); nextStage(); }
+function newShip() { game.ship = { x: W / 2 }; game.shots = []; game.bombs = []; game.dead = 0; }
+
+// Each enemy has a home slot in the swaying formation; it flies a curved path in, sits, and later dives.
+function nextStage() {
+  ++game.stage;
+  game.enemies = [];
+  let wave = 0;
+  ROWS.forEach(([kind, n], r) => {
+    for (let i = 0; i < n; ++i) {
+      const slot = { col: i - (n - 1) / 2, row: r };
+      const group = Math.floor(game.enemies.length / 8);
+      const fromLeft = group % 2 === 0;
+      game.enemies.push({ kind, hp: KINDS[kind].hp, slot, state: 'enter', t: -(group * 1.6 + (game.enemies.length % 8) * 0.12),
+        path: entryPath(fromLeft), x: -50, y: -50 });
+      wave = group;
+    }
+  });
+  game.sway = 0; game.diveTimer = 3 + wave * 1.6;
+}
+
+const slotPos = s => ({ x: W / 2 + s.col * 34 + Math.sin(game.sway) * 18, y: TOP + 50 + s.row * 32 });
+
+// cubic Bézier helpers for the swooping flight paths
+const bez = (p, t) => {
+  const u = 1 - t;
+  return { x: u * u * u * p[0].x + 3 * u * u * t * p[1].x + 3 * u * t * t * p[2].x + t * t * t * p[3].x,
+           y: u * u * u * p[0].y + 3 * u * u * t * p[1].y + 3 * u * t * t * p[2].y + t * t * t * p[3].y };
+};
+const entryPath = fromLeft => {
+  const sx = fromLeft ? -30 : W + 30, mx = fromLeft ? W * 0.8 : W * 0.2;
+  return [{ x: sx, y: H * 0.15 }, { x: mx, y: H * 0.15 }, { x: mx, y: H * 0.6 }, { x: W / 2, y: H * 0.45 }];
+};
+
+function startDive(e) {
+  const s = game.ship ? game.ship.x : W / 2;
+  e.state = 'dive'; e.t = 0;
+  e.path = [{ x: e.x, y: e.y }, { x: e.x + (e.x < W / 2 ? -80 : 80), y: e.y - 60 }, { x: s + (Math.random() - 0.5) * 160, y: H * 0.7 }, { x: s, y: H + 40 }];
+  e.shot = 0.4 + Math.random() * 0.6;
+}
+
+const diveSpeed = () => 0.55 + 0.06 * Math.min(game.stage - 1, 8);   // path fraction per second
+
+function update(dt) {
+  for (const s of stars) { s.y += s.s * dt; if (s.y > H) { s.y = 0; s.x = Math.random() * W; } }
+  game.sway += dt * 1.2;
+
+  const ship = game.ship;
+  if (ship && !game.dead) {
+    const r = Mugic.connected && Math.abs(Mugic.roll) > DEADZONE ? Math.max(-1, Math.min(1, Mugic.roll / range)) * SPEED : 0;
+    ship.x += (keys.ArrowLeft ? -KEY_SPEED : keys.ArrowRight ? KEY_SPEED : r) * dt;
+    ship.x = Math.max(16, Math.min(W - 16, ship.x));
+    if (input.fire && game.shots.length < 2) game.shots.push({ x: ship.x, y: SHIP_Y - 14 });
+  }
+  input.fire = false;
+  game.shots = game.shots.filter(s => (s.y -= 700 * dt) > TOP);
+  game.bombs = game.bombs.filter(b => { b.x += b.vx * dt; b.y += 260 * dt; return b.y < H; });
+
+  for (const e of game.enemies) {
+    if (e.state === 'enter') {
+      e.t += dt * 0.7;
+      if (e.t < 0) continue;
+      if (e.t < 1) Object.assign(e, bez(e.path, e.t));
+      else {                                         // glide from the end of the path into the home slot
+        const h = slotPos(e.slot), dx = h.x - e.x, dy = h.y - e.y, d = Math.hypot(dx, dy);
+        if (d < 4) e.state = 'home'; else { e.x += dx / d * Math.min(d, 220 * dt); e.y += dy / d * Math.min(d, 220 * dt); }
+      }
+    } else if (e.state === 'home') Object.assign(e, slotPos(e.slot));
+    else if (e.state === 'dive') {
+      e.t += dt * diveSpeed();
+      Object.assign(e, bez(e.path, Math.min(1, e.t)));
+      if ((e.shot -= dt) <= 0 && e.y < SHIP_Y - 60) {
+        game.bombs.push({ x: e.x, y: e.y, vx: ((game.ship ? game.ship.x : W / 2) - e.x) * 0.4 });
+        e.shot = 99;
+      }
+      if (e.t >= 1) { e.state = 'enter'; e.t = 1; e.x = slotPos(e.slot).x; e.y = -20; }   // wraps to the top and rejoins
+    }
+  }
+
+  // dives: one enemy at a time early on, more later; bosses bring butterfly escorts
+  if ((game.diveTimer -= dt) <= 0) {
+    const home = game.enemies.filter(e => e.state === 'home');
+    if (home.length) {
+      const e = home[Math.floor(Math.random() * home.length)];
+      startDive(e);
+      if (e.kind === 'boss') home.filter(o => o.kind === 'butterfly' && o.slot.row === 1 && Math.abs(o.slot.col - e.slot.col * 2) < 2).slice(0, 2).forEach(startDive);
+    }
+    game.diveTimer = Math.max(0.6, 2.2 - 0.2 * game.stage) * (0.6 + Math.random() * 0.8);
+  }
+
+  // shots vs enemies
+  for (let i = game.shots.length - 1; i >= 0; --i) {
+    const s = game.shots[i];
+    const e = game.enemies.find(o => o.state !== 'enter' || o.t >= 0 ? Math.abs(o.x - s.x) < 13 && Math.abs(o.y - s.y) < 12 : false);
+    if (!e) continue;
+    game.shots.splice(i, 1);
+    if (--e.hp > 0) continue;
+    addScore(KINDS[e.kind].pts[e.state === 'dive' ? 1 : 0]);
+    boom(e.x, e.y, KINDS[e.kind].color);
+    game.enemies.splice(game.enemies.indexOf(e), 1);
+  }
+  // enemies and bombs vs the fighter
+  if (ship && !game.dead) {
+    const hit = game.bombs.some(b => Math.abs(b.x - ship.x) < 10 && Math.abs(b.y - SHIP_Y) < 12)
+             || game.enemies.some(e => e.state === 'dive' && Math.abs(e.x - ship.x) < 18 && Math.abs(e.y - SHIP_Y) < 16);
+    if (hit) { boom(ship.x, SHIP_Y, '#fff'); game.dead = 2; game.bombs = []; }
+  }
+  if (game.dead && (game.dead -= dt) <= 0) {
+    if (--game.lives <= 0) { endGame(); return; }
+    newShip();
+  }
+  game.booms = (game.booms || []).filter(b => (b.t -= dt) > 0);
+  if (!game.enemies.length) nextStage();
+}
+
+function addScore(n) { game.score += n; if (game.score >= game.nextLife) { ++game.lives; game.nextLife += 50000; } }
+function boom(x, y, color) { (game.booms = game.booms || []).push({ x, y, color, t: 0.4 }); }
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicSwarmHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'galaga', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('galaga').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'title' || game.state === 'over') newGame(); else input.fire = true;
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'Space') { input.fire = true; e.preventDefault(); }
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Drawing ----------
+function drawEnemy(e) {
+  const k = KINDS[e.kind], flap = Math.floor(performance.now() / 250) % 2;
+  ctx.save(); ctx.translate(e.x, e.y);
+  ctx.fillStyle = e.kind === 'boss' && e.hp < 2 ? k.hit : k.color;
+  ctx.beginPath(); ctx.ellipse(0, 0, 5, 8, 0, 0, Math.PI * 2); ctx.fill();          // body
+  ctx.globalAlpha = 0.85;
+  const span = e.kind === 'boss' ? 14 : 11, lift = flap ? -4 : 2;
+  ctx.beginPath(); ctx.moveTo(-3, -2); ctx.lineTo(-span, lift); ctx.lineTo(-3, 5); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(3, -2); ctx.lineTo(span, lift); ctx.lineTo(3, 5); ctx.fill();
+  ctx.restore();
+}
+
+function drawShip(x, y) {
+  ctx.fillStyle = '#e8f0ff';
+  ctx.beginPath(); ctx.moveTo(x, y - 14); ctx.lineTo(x + 4, y - 4); ctx.lineTo(x + 13, y + 8); ctx.lineTo(x + 4, y + 5);
+  ctx.lineTo(x, y + 10); ctx.lineTo(x - 4, y + 5); ctx.lineTo(x - 13, y + 8); ctx.lineTo(x - 4, y - 4); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ff4d4d'; ctx.fillRect(x - 1.5, y - 6, 3, 6);
+}
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  stars.forEach((s, i) => { ctx.fillStyle = ['#fff', '#6bc8ff', '#ff6bd6', '#ffe14d'][i % 4]; ctx.fillRect(s.x, s.y, 1.5, 1.5); });
+  ctx.fillStyle = '#ff4d4d'; ctx.font = '13px ui-monospace, Menlo, monospace'; ctx.textAlign = 'left'; ctx.fillText('1UP', 10, 14);
+  ctx.fillStyle = '#fff'; ctx.fillText(String(game.score), 10, 27);
+  ctx.textAlign = 'center'; ctx.fillStyle = '#ff4d4d'; ctx.fillText('HIGH SCORE', W / 2, 14); ctx.fillStyle = '#fff'; ctx.fillText(String(game.hi), W / 2, 27);
+  ctx.textAlign = 'right'; ctx.fillText('STAGE ' + game.stage, W - 10, 20);
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#6bc8ff'; ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('STAR SWARM', W / 2, H / 2 - 20);
+    ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, H / 2 + 20);
+    return;
+  }
+  game.enemies.forEach(e => { if (e.state !== 'enter' || e.t >= 0) drawEnemy(e); });
+  ctx.fillStyle = '#fff'; game.shots.forEach(s => ctx.fillRect(s.x - 1, s.y - 6, 2, 10));
+  ctx.fillStyle = '#ff6bd6'; game.bombs.forEach(b => ctx.fillRect(b.x - 1.5, b.y - 4, 3, 8));
+  if (game.ship && !game.dead) drawShip(game.ship.x, SHIP_Y);
+  for (let i = 0; i < game.lives - 1; ++i) drawShip(16 + i * 26, H - 14);
+  (game.booms || []).forEach(b => {
+    ctx.strokeStyle = b.color; ctx.beginPath();
+    for (let i = 0; i < 8; ++i) { const a = i * Math.PI / 4, r = (0.4 - b.t) * 60; ctx.moveTo(b.x, b.y); ctx.lineTo(b.x + Math.cos(a) * r, b.y + Math.sin(a) * r); }
+    ctx.stroke();
+  });
+  if (game.state === 'over') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ff5a5a'; ctx.font = '30px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', W / 2, H / 2);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', W / 2, H / 2 + 28);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  else for (const s of stars) { s.y += s.s * dt; if (s.y > H) s.y = 0; }
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

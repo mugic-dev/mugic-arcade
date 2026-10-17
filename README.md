@@ -9,6 +9,10 @@ Browser games played with a MUGIC as the controller over Web Bluetooth. `index.h
 | Wall Breaker (Breakout style) | `bricks/` | **Roll** → paddle speed, like Invaders (`Full speed at`, default 15°); **flick** launches; hit position on the paddle sets the angle |
 | Anteater (after Stern/Tago, 1982) | `anteater/` | **Roll** / **pitch** steer the tongue tip like a proportional joystick (dominant axis, tilt = speed); steering back along the tongue retracts it; **flick** snaps it back |
 | Space Rocks (Asteroids style) | `asteroids/` | **Roll** → turn rate, **pitch forward** → thrust (both proportional, `Full turn/thrust at`, default 15°); **flick** fires; hyperspace on H (keyboard) |
+| Falling Blocks (Tetris style) | `tetris/` | **Roll** → slide, repeating faster with more tilt; **pitch forward** → soft drop; **flick** rotates |
+| Star Swarm (Galaga style) | `galaga/` | **Roll** → fighter speed (like Invaders); **flick** fires (2 shots max) |
+| Bug Blaster (Centipede style) | `centipede/` | **Roll** / **pitch** → shooter velocity in the bottom zone (proportional joystick); automatic fire |
+| Snake | `snake/` | **Roll** / **pitch** past `Turn at` (8°) turns (dominant axis, 1.4× to switch); constant speed |
 | 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.
