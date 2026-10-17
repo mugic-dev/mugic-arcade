@@ -1,7 +1,7 @@
 // Global scoreboard on Supabase (REST, no SDK). Needs common/config.js (and common/mugic.js to submit).
 //   Scores.submit({ game, mode, level, score })  asks for initials and posts; requires a connected MUGIC
 //   Scores.top(game, { mode, level, lowerIsBetter, limit })  -> [{ initials, device, score, created_at }]
-//   Scores.render(el, rows, unit)  fills a table
+//   Scores.render(el, rows, unit, { dates })  fills a table (dates: add a date column)
 //   Scores.busy()  true while the initials dialog is open
 //   Scores.latest()  -> created_at of the newest score in any game (cheap change check), or null
 const Scores = (() => {
@@ -60,10 +60,11 @@ const Scores = (() => {
     return r.ok ? 'posted' : 'post failed: ' + r.status;
   }
 
-  function render(el, rows, unit = '') {
+  function render(el, rows, unit = '', { dates = false } = {}) {
+    const day = r => dates ? `<td class="sc-dev">${new Date(r.created_at).toLocaleDateString()}</td>` : '';
     el.innerHTML = rows.length
       ? '<table class="sc-table">' + rows.map((r, i) =>
-          `<tr><td>${i + 1}.</td><td>${r.initials}</td><td>${r.score}${unit}</td><td class="sc-dev">${r.device}</td></tr>`).join('') + '</table>'
+          `<tr><td>${i + 1}.</td><td>${r.initials}</td><td>${r.score}${unit}</td><td class="sc-dev">${r.device}</td>${day(r)}</tr>`).join('') + '</table>'
       : `<p class="sc-empty">${enabled() ? 'no scores yet' : 'scoreboard not configured'}</p>`;
   }
 

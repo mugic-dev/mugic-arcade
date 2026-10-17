@@ -144,9 +144,9 @@ function draw() {
   // readouts: green when within the safe landing limits
   const ok = (v, lim) => (Math.abs(v) < lim ? '#4dff88' : '#ff9f3a');
   ctx.textAlign = 'right';
-  ctx.fillStyle = ok(l.vx, SAFE_VX); ctx.fillText('H SPEED ' + l.vx.toFixed(0), W - 10, 20);
-  ctx.fillStyle = ok(l.vy, SAFE_VY); ctx.fillText('V SPEED ' + l.vy.toFixed(0), W - 140, 20);
-  ctx.fillStyle = ok(l.a, SAFE_ANGLE); ctx.fillText('ANGLE ' + Math.round(l.a * 180 / Math.PI) + '°', W - 270, 20);
+  ctx.fillStyle = ok(l.vx, SAFE_VX); ctx.fillText('H SPEED ' + l.vx.toFixed(0), W - 10, 40);
+  ctx.fillStyle = ok(l.vy, SAFE_VY); ctx.fillText('V SPEED ' + l.vy.toFixed(0), W - 140, 40);
+  ctx.fillStyle = ok(l.a, SAFE_ANGLE); ctx.fillText('ANGLE ' + Math.round(l.a * 180 / Math.PI) + '°', W - 270, 40);
 
   ctx.strokeStyle = '#e8f0ff'; ctx.lineWidth = 1.5; ctx.beginPath();
   game.terrain.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();

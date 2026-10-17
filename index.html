@@ -14,71 +14,54 @@
   .games a:hover { border-color: var(--acc); }
   .games h2 { margin: 0 0 6px; font-size: 18px; color: var(--acc); }
   .games p { margin: 0; color: var(--dim); }
+  .games a img { display: block; width: 100%; height: 140px; object-fit: cover; object-position: center; border-radius: 4px; margin-bottom: 10px; background: #000; }
+  .games a.scores { padding: 10px; }
+  .games a.scores img { display: none; }
+  h1.banner { margin-top: 34px; }
 </style>
 </head>
 <body>
 <h1>MUGIC ARCADE</h1>
-<div class="games">
-  <a href="invaders/"><h2>Invaders</h2><p>Roll to steer the cannon, flick to fire.</p></a>
-  <a href="pacman/"><h2>Muncher</h2><p>Pac-Man-style maze: roll and pitch steer like a joystick, tilt sets speed.</p></a>
-  <a href="bricks/"><h2>Wall Breaker</h2><p>Roll steers the paddle like a joystick, flick launches the ball.</p></a>
-  <a href="anteater/"><h2>Anteater</h2><p>Steer the tongue through the anthill with roll and pitch, flick to pull it back.</p></a>
-  <a href="asteroids/"><h2>Space Rocks</h2><p>Asteroids-style: roll to turn, tip forward to thrust, flick to fire.</p></a>
-  <a href="tetris/"><h2>Falling Blocks</h2><p>Tetris-style: roll slides, tip forward drops, flick rotates.</p></a>
-  <a href="galaga/"><h2>Star Swarm</h2><p>Galaga-style: roll steers the fighter, flick fires at the diving swarm.</p></a>
-  <a href="centipede/"><h2>Bug Blaster</h2><p>Centipede-style: roll and pitch steer the shooter, auto-fire.</p></a>
-  <a href="snake/"><h2>Snake</h2><p>Tilt to turn; eat, grow, don't bite yourself.</p></a>
-  <a href="frogger/"><h2>Road Hopper</h2><p>Frogger-style: each flick is a hop (yaw left/right, pitch up/down).</p></a>
-  <a href="lander/"><h2>Moon Lander</h2><p>Lunar Lander: roll to turn, tip forward to throttle, land softly.</p></a>
-  <a href="racer/"><h2>Grand Prix</h2><p>Pole Position-style: roll steers, pitch is gas/brake, flick shifts LO/HI.</p></a>
-  <a href="kungfu/"><h2>Dragon Tower</h2><p>Kung-Fu Master-style: roll walks, tip down crouch / up jump, flick strikes, shake off grabbers.</p></a>
-  <a href="toss/"><h2>Paper Toss</h2><p>Throw for real: point to aim, tip up to lob, twist for spin, throw harder to go further.</p></a>
-  <a href="chopper/"><h2>Rescue Chopper</h2><p>Choplifter-style: roll and pitch fly, hover to bomb, flick fires; land to rescue hostages.</p></a>
-  <a href="sokoban/"><h2>倉庫番 Sōkoban</h2><p>Flick left/right/up/down to step and push crates, undo with a button.</p></a>
-</div>
-<div class="games">
-  <div class="scores"><h3>INVADERS — TOP 10</h3><div id="invBoard"></div></div>
-  <div class="scores"><h3>MUNCHER — TOP 10</h3><div id="pacBoard"></div></div>
-  <div class="scores"><h3>WALL BREAKER — TOP 10</h3><div id="brkBoard"></div></div>
-  <div class="scores"><h3>ANTEATER — TOP 10</h3><div id="antBoard"></div></div>
-  <div class="scores"><h3>SPACE ROCKS — TOP 10</h3><div id="rockBoard"></div></div>
-  <div class="scores"><h3>FALLING BLOCKS — TOP 10</h3><div id="tetBoard"></div></div>
-  <div class="scores"><h3>STAR SWARM — TOP 10</h3><div id="galBoard"></div></div>
-  <div class="scores"><h3>BUG BLASTER — TOP 10</h3><div id="cenBoard"></div></div>
-  <div class="scores"><h3>SNAKE — TOP 10</h3><div id="snkBoard"></div></div>
-  <div class="scores"><h3>ROAD HOPPER — TOP 10</h3><div id="frgBoard"></div></div>
-  <div class="scores"><h3>MOON LANDER — TOP 10</h3><div id="lndBoard"></div></div>
-  <div class="scores"><h3>GRAND PRIX — TOP 10</h3><div id="rcrBoard"></div></div>
-  <div class="scores"><h3>DRAGON TOWER — TOP 10</h3><div id="kfBoard"></div></div>
-  <div class="scores"><h3>PAPER TOSS — LONGEST STREAK</h3><div id="tossBoard"></div></div>
-  <div class="scores"><h3>RESCUE CHOPPER — TOP 10</h3><div id="chopBoard"></div></div>
-  <div class="scores"><h3>SŌKOBAN HARD — LEVEL RECORDS</h3><div id="sokBoard"></div></div>
-</div>
-<p class="help" style="max-width: 1040px">Scores are posted with three initials and the code of the MUGIC that played (connected over Bluetooth).</p>
+<div class="games" id="cards"></div>
+<p class="help">Needs a MUGIC in BLE output mode (firmware ≥ 2.2.0) and Chrome or Edge on a computer or Android
+  (iPhone/iPad browsers have no Web Bluetooth). Every game also plays with the keyboard.</p>
+<h1 class="banner">HIGH SCORES</h1>
+<div class="games" id="boards"></div>
+<p class="help" style="max-width: 1040px">Scores are posted with three initials and the code of the MUGIC that played
+  (connected over Bluetooth). Click a table for that game's top 100.</p>
+<script src="common/games.js"></script>
 <script>
-const BOARDS = [['invaders', 'invBoard'], ['pacman', 'pacBoard'], ['bricks', 'brkBoard'], ['anteater', 'antBoard'], ['asteroids', 'rockBoard'],
-  ['tetris', 'tetBoard'], ['galaga', 'galBoard'], ['centipede', 'cenBoard'], ['snake', 'snkBoard'], ['frogger', 'frgBoard'],
-  ['lander', 'lndBoard'], ['racer', 'rcrBoard'], ['kungfu', 'kfBoard'], ['toss', 'tossBoard'], ['chopper', 'chopBoard']];
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
+$('cards').innerHTML = GAMES.map(g => `<a href="${g.id}/"><img src="shots/${g.id}.webp" alt="" loading="lazy">
+  <h2>${esc(g.name)}</h2><p>${esc(g.blurb)}</p></a>`).join('');
+$('boards').innerHTML = GAMES.map(g => `<a class="scores" href="scores/?game=${g.id}">
+  <h3>${esc(g.short || g.name.toUpperCase())} — ${g.board || 'TOP 10'}</h3><div id="b-${g.id}"></div></a>`).join('');
+
 function renderAll() {
-  BOARDS.forEach(([g, id]) => Scores.top(g).then(rows => Scores.render(document.getElementById(id), rows)));
-  // level records: best (fewest moves) per Sokoban level
-  Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(l => Scores.top('sokoban', { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))
-    .then(levels => Scores.render(document.getElementById('sokBoard'),
-      levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${i + 1} ${x.initials}` }))), ' moves'));
+  for (const g of GAMES) {
+    if (g.levels) {
+      // level records: best (fewest moves) per level, hard mode
+      Promise.all(Array.from({ length: g.levels }, (_, i) => Scores.top(g.id, { mode: 'hard', level: i + 1, lowerIsBetter: true, limit: 1 })))
+        .then(levels => Scores.render($('b-' + g.id), levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${i + 1} ${x.initials}` }))), ' moves'));
+    } else Scores.top(g.id).then(rows => Scores.render($('b-' + g.id), rows));
+  }
 }
-// Refresh right away when coming back to this page, and every 3 s while it's shown: a single cheap request for
-// the newest score's time, re-rendering all boards only when it changed.
+// Draw the boards now; then, every 3 s while the page is shown, one cheap request for the newest score's time,
+// re-rendering only when it changed. Also refresh right away when coming back to this page.
 let newest;
 async function refresh(force) {
   if (document.hidden) return;
-  const t = await Scores.latest();
-  if (force || t !== newest) { newest = t; renderAll(); }
+  try {
+    const t = await Scores.latest();
+    if (force || t !== newest) { newest = t; renderAll(); }
+  } catch (e) { if (force) renderAll(); }
 }
-refresh(true);
+renderAll();
+Scores.latest().then(t => { newest = t; }).catch(() => {});
 setInterval(refresh, 3000);
 addEventListener('pageshow', e => { if (e.persisted) refresh(true); });
 document.addEventListener('visibilitychange', () => refresh());
 </script>
-<p class="help">Needs a MUGIC in BLE output mode (firmware ≥ 2.2.0) and Chrome or Edge. Every game also plays with the keyboard.</p>
 </body>
 </html>
