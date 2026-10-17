@@ -41,9 +41,10 @@ $('boards').innerHTML = GAMES.map(g => `<a class="scores" href="scores/?game=${g
 function renderAll() {
   for (const g of GAMES) {
     if (g.levels) {
-      // level records: best (fewest moves) per level, hard mode
-      Promise.all(Array.from({ length: g.levels }, (_, i) => Scores.top(g.id, { mode: 'hard', level: i + 1, lowerIsBetter: true, limit: 1 })))
-        .then(levels => Scores.render($('b-' + g.id), levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${i + 1} ${x.initials}` }))), ' moves'));
+      // level records: best (fewest moves) per level, hard mode, hardest level first
+      const order = Array.from({ length: g.levels }, (_, i) => g.levels - i);
+      Promise.all(order.map(l => Scores.top(g.id, { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))
+        .then(levels => Scores.render($('b-' + g.id), levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${order[i]} ${x.initials}` }))), ' moves'));
     } else Scores.top(g.id).then(rows => Scores.render($('b-' + g.id), rows));
   }
 }

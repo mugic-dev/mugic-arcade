@@ -31,8 +31,9 @@ $('play').href = `../${g.id}/`; $('play').textContent = `▶ play ${g.name}`;
 // levelled games: top 10 (fewest moves, hard mode) per level; others: top 100
 function render() {
   if (g.levels) {
-    $('content').innerHTML = '<div class="levels">' + Array.from({ length: g.levels }, (_, i) =>
-      `<div class="scores"><h3>LEVEL ${i + 1} — FEWEST MOVES</h3><div id="l${i + 1}"></div></div>`).join('') + '</div>';
+    // hardest level first
+    $('content').innerHTML = '<div class="levels">' + Array.from({ length: g.levels }, (_, i) => g.levels - i).map(l =>
+      `<div class="scores"><h3>LEVEL ${l} — FEWEST MOVES</h3><div id="l${l}"></div></div>`).join('') + '</div>';
     for (let l = 1; l <= g.levels; ++l)
       Scores.top(g.id, { mode: 'hard', level: l, lowerIsBetter: true, limit: 10 }).then(rows => Scores.render($('l' + l), rows, ' moves', { dates: true }));
   } else {
