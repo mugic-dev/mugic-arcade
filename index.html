@@ -28,6 +28,8 @@
   <a href="galaga/"><h2>Star Swarm</h2><p>Galaga-style: roll steers the fighter, flick fires at the diving swarm.</p></a>
   <a href="centipede/"><h2>Bug Blaster</h2><p>Centipede-style: roll and pitch steer the shooter, auto-fire.</p></a>
   <a href="snake/"><h2>Snake</h2><p>Tilt to turn; eat, grow, don't bite yourself.</p></a>
+  <a href="frogger/"><h2>Road Hopper</h2><p>Frogger-style: each flick is a hop (yaw left/right, pitch up/down).</p></a>
+  <a href="lander/"><h2>Moon Lander</h2><p>Lunar Lander: roll to turn, tip forward to throttle, land softly.</p></a>
   <a href="sokoban/"><h2>倉庫番 Sōkoban</h2><p>Flick left/right/up/down to step and push crates, undo with a button.</p></a>
 </div>
 <div class="games">
@@ -40,6 +42,8 @@
   <div class="scores"><h3>STAR SWARM — TOP 10</h3><div id="galBoard"></div></div>
   <div class="scores"><h3>BUG BLASTER — TOP 10</h3><div id="cenBoard"></div></div>
   <div class="scores"><h3>SNAKE — TOP 10</h3><div id="snkBoard"></div></div>
+  <div class="scores"><h3>ROAD HOPPER — TOP 10</h3><div id="frgBoard"></div></div>
+  <div class="scores"><h3>MOON LANDER — TOP 10</h3><div id="lndBoard"></div></div>
   <div class="scores"><h3>SŌKOBAN HARD — LEVEL RECORDS</h3><div id="sokBoard"></div></div>
 </div>
 <p class="help" style="max-width: 1040px">Scores are posted with three initials and the code of the MUGIC that played (connected over Bluetooth).</p>
@@ -49,7 +53,7 @@ Scores.top('pacman').then(rows => Scores.render(document.getElementById('pacBoar
 Scores.top('bricks').then(rows => Scores.render(document.getElementById('brkBoard'), rows));
 Scores.top('anteater').then(rows => Scores.render(document.getElementById('antBoard'), rows));
 Scores.top('asteroids').then(rows => Scores.render(document.getElementById('rockBoard'), rows));
-[['tetris', 'tetBoard'], ['galaga', 'galBoard'], ['centipede', 'cenBoard'], ['snake', 'snkBoard']]
+[['tetris', 'tetBoard'], ['galaga', 'galBoard'], ['centipede', 'cenBoard'], ['snake', 'snkBoard'], ['frogger', 'frgBoard'], ['lander', 'lndBoard']]
   .forEach(([g, id]) => Scores.top(g).then(rows => Scores.render(document.getElementById(id), rows)));
 // level records: best (fewest moves) per Sokoban level
 Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(l => Scores.top('sokoban', { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))

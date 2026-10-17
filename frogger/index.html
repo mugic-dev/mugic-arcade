@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Road Hopper</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>ROAD HOPPER</h1>
+<div id="bar"></div>
+<canvas id="game" width="468" height="536"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, point the MUGIC straight ahead and click Calibrate center. Each flick is one hop: flick up/down
+  (pitch) or left/right (yaw). Cross the road, ride the logs and turtles across the river (the water is deadly, and some
+  turtles dive), and fill the five homes before the timer runs out. Keyboard: arrows hop, Enter start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+let minTurn = 6;
+try { minTurn = +localStorage.getItem('mugicHopperTurn') || 6; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows',
+  axes: ['yaw', 'pitch'],
+  extraRows: [['Min turn', `<input type="range" id="minTurn" min="2" max="30" value="${minTurn}">`, 'minTurnVal']],
+});
+$('minTurnVal').textContent = minTurn + '°';
+$('minTurn').oninput = e => {
+  minTurn = +e.target.value; $('minTurnVal').textContent = minTurn + '°';
+  try { localStorage.setItem('mugicHopperTurn', minTurn); } catch (e) {}
+};
+
+// ---------- Board ----------
+const COLS = 13, ROWS = 13, C = 36, TOP = 44, W = COLS * C;
+const HOMES = [1, 3.75, 6.5, 9.25, 12].map(x => x - 0.5);    // home bay centers (columns) in row 0
+// lanes: row, speed (cells/s, sign = direction), item length, spacing between item starts, kind
+const LANES = [
+  { row: 1, speed: 1.6, len: 4, every: 7, kind: 'log' },
+  { row: 2, speed: -1.4, len: 2, every: 4, kind: 'turtle', dive: true },
+  { row: 3, speed: 2.4, len: 6, every: 9, kind: 'log' },
+  { row: 4, speed: 1.1, len: 3, every: 5, kind: 'log' },
+  { row: 5, speed: -1.8, len: 3, every: 5, kind: 'turtle', dive: true },
+  { row: 7, speed: -1.2, len: 2, every: 6, kind: 'truck' },
+  { row: 8, speed: 2.6, len: 1, every: 7, kind: 'racer' },
+  { row: 9, speed: -1.5, len: 1, every: 4, kind: 'car' },
+  { row: 10, speed: 1.2, len: 1, every: 4.3, kind: 'car' },
+  { row: 11, speed: -1.0, len: 1, every: 3.6, kind: 'car' },
+];
+const RIVER = r => r >= 1 && r <= 5, START = [6, 12];
+const SPAN = COLS + 8;                              // items wrap around a span a bit wider than the screen
+
+const game = { state: 'title', score: 0, hi: 0, lives: 3, level: 1 };
+try { game.hi = +localStorage.getItem('mugicHopperHi') || 0; } catch (e) {}
+
+function newGame() { game.score = 0; game.lives = 3; game.level = 1; game.state = 'play'; newLevel(); }
+function newLevel() { game.homes = HOMES.map(() => false); game.clock = 0; newFrog(); }
+function newFrog() { game.frog = { x: START[0], y: START[1], best: START[1], face: 'up' }; game.timer = 30; game.dead = 0; }
+
+const levelSpeed = () => 1 + 0.15 * (game.level - 1);
+// positions of a lane's items at the current clock: [start, end] in columns
+function items(l) {
+  const n = Math.ceil(SPAN / l.every), out = [];
+  for (let i = 0; i < n; ++i) {
+    let x = (i * l.every + l.speed * levelSpeed() * game.clock) % SPAN;
+    if (x < 0) x += SPAN;
+    x -= 4;
+    out.push({ x0: x, x1: x + l.len, diving: l.dive && i % 3 === 1 && Math.sin(game.clock * 1.3 + i) > 0.55 });
+  }
+  return out;
+}
+
+function hop(dir) {
+  if (game.state !== 'play' || game.dead) return;
+  const f = game.frog, [dx, dy] = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] }[dir];
+  const nx = Math.round(f.x) + dx, ny = f.y + dy;
+  if (nx < 0 || nx >= COLS || ny > ROWS - 1) return;
+  f.face = dir;
+  if (ny === 0) {                                   // reaching the top: only into an empty home bay
+    const h = HOMES.findIndex(c => Math.abs(c - f.x) < 0.6);
+    if (h < 0 || game.homes[h]) { f.y = 0; die(); return; }
+    game.homes[h] = true;
+    game.score += 50 + Math.floor(game.timer) * 10;
+    if (game.homes.every(Boolean)) { game.score += 1000; ++game.level; newLevel(); } else newFrog();
+    return;
+  }
+  f.x = RIVER(ny) ? f.x + dx : nx; f.y = ny;           // on the river keep the log offset; on land snap to the grid
+  if (ny < f.best) { f.best = ny; game.score += 10; }
+}
+
+function die() { game.dead = 1.2; }
+
+function update(dt) {
+  game.clock += dt;
+  const f = game.frog;
+  if (game.dead) {
+    if ((game.dead -= dt) <= 0) { if (--game.lives <= 0) endGame(); else newFrog(); }
+    return;
+  }
+  if ((game.timer -= dt) <= 0) { die(); return; }
+  const lane = LANES.find(l => l.row === f.y);
+  if (lane && RIVER(f.y)) {
+    const on = items(lane).find(it => !it.diving && f.x + 0.5 > it.x0 + 0.15 && f.x + 0.5 < it.x1 - 0.15);
+    if (!on) { die(); return; }
+    f.x += lane.speed * levelSpeed() * dt;          // carried along
+    if (f.x < -0.4 || f.x > COLS - 0.6) die();
+  } else if (lane) {
+    if (items(lane).some(it => f.x + 0.8 > it.x0 && f.x + 0.2 < it.x1)) die();
+  }
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicHopperHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'frogger', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('frogger').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+// A flick is a hop; its direction is the axis that turned most during it. The snap back to
+// center (same axis, opposite way, within 600 ms) is ignored.
+let lastFlick = null;
+Mugic.onFlickDir = d => {
+  if (Scores.busy()) return;
+  if (game.state !== 'play') { newGame(); return; }
+  const [axis, v] = [['yaw', d.yaw], ['pitch', d.pitch]].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
+  if (Math.abs(v) < minTurn) return;
+  const now = performance.now();
+  if (lastFlick && lastFlick.axis === axis && Math.sign(lastFlick.v) !== Math.sign(v) && now - lastFlick.t < 600) return;
+  lastFlick = { axis, v, t: now };
+  hop(axis === 'yaw' ? (v > 0 ? 'right' : 'left') : (v > 0 ? 'up' : 'down'));
+};
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
+  if (d) { hop(d); e.preventDefault(); }
+  if (e.code === 'Enter' && game.state !== 'play') newGame();
+});
+
+// ---------- Drawing ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const COLORS = { truck: '#e8e8e8', racer: '#ff4dff', car: ['#ffe14d', '#4d7bff', '#ff9f3a'] };
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText('SCORE ' + game.score, 10, 26);
+  ctx.textAlign = 'center'; ctx.fillText('HI ' + game.hi, W / 2, 26);
+  ctx.textAlign = 'right'; ctx.fillText('LV ' + game.level + '  ' + '♥'.repeat(Math.max(0, game.lives)), W - 10, 26);
+  const ry = r => TOP + r * C;
+  ctx.fillStyle = '#0b2a6b'; ctx.fillRect(0, ry(0), W, 6 * C);          // river (and the home row)
+  ctx.fillStyle = '#1f6b2a'; ctx.fillRect(0, ry(0), W, C);               // hedge
+  HOMES.forEach((h, i) => {
+    ctx.fillStyle = '#0b2a6b'; ctx.fillRect((h - 0.1) * C, ry(0) + 6, C * 1.2, C - 6);
+    if (game.homes && game.homes[i]) drawFrog(h, 0, 'down');
+  });
+  ctx.fillStyle = '#4a2a7a'; ctx.fillRect(0, ry(6), W, C); ctx.fillRect(0, ry(12), W, C);   // safe strips
+  ctx.fillStyle = '#111'; ctx.fillRect(0, ry(7), W, 5 * C);
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#4dff88'; ctx.font = '34px ui-monospace, Menlo, monospace'; ctx.fillText('ROAD HOPPER', W / 2, ry(6) + 26);
+    ctx.fillStyle = '#fff'; ctx.font = '15px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, ry(9) + 20);
+    return;
+  }
+  LANES.forEach((l, li) => items(l).forEach((it, i) => {
+    const x = it.x0 * C, y = ry(l.row), w = l.len * C;
+    if (l.kind === 'log') { ctx.fillStyle = '#8b5a2b'; ctx.fillRect(x + 2, y + 6, w - 4, C - 12); ctx.fillStyle = '#a8743c'; ctx.fillRect(x + 2, y + 10, w - 4, 4); }
+    else if (l.kind === 'turtle') {
+      if (it.diving && Math.floor(game.clock * 4) % 2) return;
+      for (let k = 0; k < l.len; ++k) { ctx.fillStyle = it.diving ? '#5a8a5a' : '#2fbf5a'; ctx.beginPath(); ctx.arc(x + (k + 0.5) * C, y + C / 2, C * 0.38, 0, Math.PI * 2); ctx.fill(); }
+    } else {
+      const c = COLORS[l.kind];
+      ctx.fillStyle = Array.isArray(c) ? c[li % c.length] : c;
+      ctx.fillRect(x + 3, y + 7, w - 6, C - 14);
+      ctx.fillStyle = '#000'; ctx.fillRect(x + (l.speed > 0 ? w - 12 : 6), y + 10, 6, C - 20);
+    }
+  }));
+  if (!game.dead || Math.floor(game.dead * 8) % 2) drawFrog(game.frog.x, game.frog.y, game.frog.face);
+  // time bar
+  ctx.fillStyle = game.timer < 8 ? '#ff4d4d' : '#4dff88';
+  ctx.fillRect(10, TOP + ROWS * C + 8, (W - 20) * Math.max(0, game.timer) / 30, 8);
+  if (game.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, ry(5.5), W, 2 * C);
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ff5a5a'; ctx.font = '28px ui-monospace, Menlo, monospace'; ctx.fillText('GAME OVER', W / 2, ry(6.3));
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', W / 2, ry(6.9));
+  }
+}
+
+function drawFrog(x, y, face) {
+  const cx = (x + 0.5) * C, cy = TOP + (y + 0.5) * C;
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate({ up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[face]);
+  ctx.fillStyle = '#7dff4d';
+  ctx.beginPath(); ctx.ellipse(0, 2, 10, 12, 0, 0, Math.PI * 2); ctx.fill();
+  for (const s of [-1, 1]) { ctx.fillRect(s * 9 - 3, -10, 6, 6); ctx.fillRect(s * 10 - 3, 8, 6, 7); }
+  ctx.fillStyle = '#000'; ctx.fillRect(-6, -8, 3, 3); ctx.fillRect(3, -8, 3, 3);
+  ctx.restore();
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

@@ -13,6 +13,8 @@ Browser games played with a MUGIC as the controller over Web Bluetooth. `index.h
 | Star Swarm (Galaga style) | `galaga/` | **Roll** → fighter speed (like Invaders); **flick** fires (2 shots max) |
 | Bug Blaster (Centipede style) | `centipede/` | **Roll** / **pitch** → shooter velocity in the bottom zone (proportional joystick); automatic fire |
 | Snake | `snake/` | **Roll** / **pitch** past `Turn at` (8°) turns (dominant axis, 1.4× to switch); constant speed |
+| Road Hopper (Frogger style) | `frogger/` | One **flick** = one hop; direction = axis that turned most (**yaw** left/right, **pitch** up/down), snap-back ignored, as in Sōkoban |
+| Moon Lander (Lunar Lander) | `lander/` | **Roll** → turn rate, **pitch forward** → throttle (proportional); land on a pad upright and slow |
 | 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.

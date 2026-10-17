@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Moon Lander</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>MOON LANDER</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="500"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll turns the lander (the further, the faster),
+  tip it forward (pitch down) to fire the engine — the further, the more thrust. Touch down on a flat pad, upright and slow
+  (the readouts turn green). Fuel is all you have: a crash costs fuel, and the game ends when it runs out.
+  Keyboard: ← → turn, ↑ thrust, Enter start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 3;
+const GRAVITY = 16, THRUST = 42, TURN_RATE = 2.2, BURN = 22;   // px/s², px/s² at full throttle, rad/s, fuel/s
+const SAFE_VY = 22, SAFE_VX = 14, SAFE_ANGLE = 0.2;              // px/s, px/s, rad
+let range = 20;
+try { range = +localStorage.getItem('mugicLanderRange') || 20; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → ↑',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full turn/thrust at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicLanderRange', range); } catch (e) {}
+};
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, TOP = 30;
+const game = { state: 'title', score: 0, hi: 0, fuel: 0 };
+try { game.hi = +localStorage.getItem('mugicLanderHi') || 0; } catch (e) {}
+const keys = {};
+
+// Jagged terrain with a few flat pads; narrower pads pay more.
+function makeTerrain() {
+  const pts = [], pads = [];
+  let x = 0, y = H - 60 - Math.random() * 120;
+  const padAt = new Set([2, 5, 8, 11].map(i => i + Math.floor(Math.random() * 2)));
+  for (let i = 0; x < W; ++i) {
+    pts.push({ x, y });
+    if (padAt.has(i)) {
+      const mult = [2, 3, 5][Math.floor(Math.random() * 3)], w = { 2: 80, 3: 56, 5: 36 }[mult];
+      pads.push({ x0: x, x1: Math.min(W, x + w), y, mult });
+      x += w; pts.push({ x, y });
+    }
+    x += 20 + Math.random() * 30;
+    y = Math.max(TOP + 160, Math.min(H - 12, y + (Math.random() - 0.5) * 110));
+  }
+  pts.push({ x: W, y });
+  return { pts, pads };
+}
+
+const groundAt = x => {
+  const p = game.terrain.pts;
+  for (let i = 1; i < p.length; ++i) if (x <= p[i].x) return p[i - 1].y + (p[i].y - p[i - 1].y) * (x - p[i - 1].x) / (p[i].x - p[i - 1].x || 1);
+  return p[p.length - 1].y;
+};
+
+function newGame() { game.score = 0; game.fuel = 1000; game.state = 'play'; newLanding(); }
+function newLanding() {
+  game.terrain = makeTerrain();
+  game.lander = { x: 60 + Math.random() * (W - 120), y: TOP + 30, vx: (Math.random() - 0.5) * 60, vy: 0, a: 0, throttle: 0 };
+  game.result = null;
+}
+
+function update(dt) {
+  if (game.result) {                                 // pause on the result, then the next landing (or game over)
+    if ((game.result.t -= dt) <= 0) { if (game.fuel <= 0) endGame(); else newLanding(); }
+    return;
+  }
+  const l = game.lander;
+  const roll = Mugic.connected && Math.abs(Mugic.roll) > DEADZONE ? Math.max(-1, Math.min(1, Mugic.roll / range)) : 0;
+  const fwd = Mugic.connected && -Mugic.pitch > DEADZONE ? Math.min(1, -Mugic.pitch / range) : 0;
+  l.a += (keys.ArrowLeft ? -1 : keys.ArrowRight ? 1 : roll) * TURN_RATE * dt;
+  l.a = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, l.a));
+  l.throttle = game.fuel > 0 ? (keys.ArrowUp ? 1 : fwd) : 0;
+  game.fuel = Math.max(0, game.fuel - l.throttle * BURN * dt);
+  l.vx += Math.sin(l.a) * THRUST * l.throttle * dt;
+  l.vy += (GRAVITY - Math.cos(l.a) * THRUST * l.throttle) * dt;
+  l.x += l.vx * dt; l.y += l.vy * dt;
+  if (l.x < 0 || l.x > W) { l.x = (l.x + W) % W; }
+  if (l.y < TOP) { l.y = TOP; l.vy = Math.max(0, l.vy); }
+
+  // touchdown: both feet on the ground
+  const feet = [l.x - 9, l.x + 9];
+  if (feet.some(fx => l.y + 12 >= groundAt(fx))) {
+    const pad = game.terrain.pads.find(p => feet[0] >= p.x0 && feet[1] <= p.x1);
+    const soft = Math.abs(l.vy) < SAFE_VY && Math.abs(l.vx) < SAFE_VX && Math.abs(l.a) < SAFE_ANGLE;
+    const gentle = Math.abs(l.vy) < SAFE_VY / 2 && Math.abs(l.vx) < SAFE_VX / 2;
+    if (pad && soft) {
+      const pts = (gentle ? 50 : 15) * pad.mult;
+      game.score += pts; game.fuel += gentle ? 50 : 0;
+      game.result = { text: gentle ? `PERFECT LANDING  +${pts}` : `HARD LANDING  +${pts}`, color: '#4dff88', t: 2.5 };
+    } else {
+      game.fuel = Math.max(0, game.fuel - 200); l.crashed = true;
+      game.result = { text: 'CRASHED  −200 FUEL', color: '#ff5a5a', t: 2.5 };
+    }
+    l.y = Math.min(...feet.map(groundAt)) - 12; l.throttle = 0;
+  }
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicLanderHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'lander', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('lander').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => { if (!Scores.busy() && game.state !== 'play') newGame(); };
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code === 'Enter' && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.textAlign = 'left'; ctx.fillStyle = '#fff';
+  ctx.fillText('SCORE ' + game.score, 10, 20); ctx.fillText('HI ' + game.hi, 150, 20);
+  ctx.fillStyle = game.fuel < 150 ? '#ff5a5a' : '#fff'; ctx.fillText('FUEL ' + Math.round(game.fuel), 260, 20);
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#e8f0ff'; ctx.font = '36px ui-monospace, Menlo, monospace'; ctx.fillText('MOON LANDER', W / 2, H / 2 - 20);
+    ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS ENTER', W / 2, H / 2 + 20);
+    return;
+  }
+  const l = game.lander;
+  // readouts: green when within the safe landing limits
+  const ok = (v, lim) => (Math.abs(v) < lim ? '#4dff88' : '#ff9f3a');
+  ctx.textAlign = 'right';
+  ctx.fillStyle = ok(l.vx, SAFE_VX); ctx.fillText('H SPEED ' + l.vx.toFixed(0), W - 10, 20);
+  ctx.fillStyle = ok(l.vy, SAFE_VY); ctx.fillText('V SPEED ' + l.vy.toFixed(0), W - 140, 20);
+  ctx.fillStyle = ok(l.a, SAFE_ANGLE); ctx.fillText('ANGLE ' + Math.round(l.a * 180 / Math.PI) + '°', W - 270, 20);
+
+  ctx.strokeStyle = '#e8f0ff'; ctx.lineWidth = 1.5; ctx.beginPath();
+  game.terrain.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke();
+  game.terrain.pads.forEach(p => {
+    ctx.strokeStyle = '#4dff88'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(p.x0, p.y); ctx.lineTo(p.x1, p.y); ctx.stroke();
+    ctx.fillStyle = '#4dff88'; ctx.textAlign = 'center'; ctx.font = '12px ui-monospace, Menlo, monospace'; ctx.fillText('x' + p.mult, (p.x0 + p.x1) / 2, p.y + 16);
+  });
+
+  ctx.save(); ctx.translate(l.x, l.y); ctx.rotate(l.a);
+  ctx.strokeStyle = l.crashed ? '#ff5a5a' : '#e8f0ff'; ctx.lineWidth = 1.5; ctx.beginPath();
+  ctx.arc(0, -4, 7, 0, Math.PI * 2);                                         // cabin
+  ctx.moveTo(-8, 3); ctx.lineTo(8, 3); ctx.lineTo(6, 8); ctx.lineTo(-6, 8); ctx.closePath();   // descent stage
+  ctx.moveTo(-6, 8); ctx.lineTo(-10, 12); ctx.moveTo(6, 8); ctx.lineTo(10, 12);               // legs
+  ctx.moveTo(-12, 12); ctx.lineTo(-8, 12); ctx.moveTo(8, 12); ctx.lineTo(12, 12);
+  ctx.stroke();
+  if (l.throttle > 0 && !game.result) {
+    ctx.strokeStyle = '#ffb847'; ctx.beginPath(); ctx.moveTo(-3, 9); ctx.lineTo(0, 10 + l.throttle * 18 * (0.7 + Math.random() * 0.3)); ctx.lineTo(3, 9); ctx.stroke();
+  }
+  ctx.restore();
+
+  ctx.textAlign = 'center';
+  if (game.result) { ctx.fillStyle = game.result.color; ctx.font = '22px ui-monospace, Menlo, monospace'; ctx.fillText(game.result.text, W / 2, 120); }
+  if (game.state === 'over') {
+    ctx.fillStyle = '#ff5a5a'; ctx.font = '30px ui-monospace, Menlo, monospace'; ctx.fillText('OUT OF FUEL', W / 2, H / 2 - 40);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', W / 2, H / 2 - 10);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
