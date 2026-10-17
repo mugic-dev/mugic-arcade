@@ -8,7 +8,8 @@
 <script src="common/config.js"></script>
 <script src="common/scores.js"></script>
 <style>
-  .games { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; width: min(640px, 100%); margin-top: 10px; }
+  .games { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; width: min(1040px, 100%); margin-top: 10px; }
+  .games .scores { width: auto; margin-top: 0; }
   .games a { display: block; background: var(--panel); border: 1px solid #2a3040; border-radius: 8px; padding: 16px; text-decoration: none; color: var(--fg); }
   .games a:hover { border-color: var(--acc); }
   .games h2 { margin: 0 0 6px; font-size: 18px; color: var(--acc); }
@@ -41,7 +42,7 @@
   <div class="scores"><h3>SNAKE — TOP 10</h3><div id="snkBoard"></div></div>
   <div class="scores"><h3>SŌKOBAN HARD — LEVEL RECORDS</h3><div id="sokBoard"></div></div>
 </div>
-<p class="help">Scores are posted with three initials and the code of the MUGIC that played (connected over Bluetooth).</p>
+<p class="help" style="max-width: 1040px">Scores are posted with three initials and the code of the MUGIC that played (connected over Bluetooth).</p>
 <script>
 Scores.top('invaders').then(rows => Scores.render(document.getElementById('invBoard'), rows));
 Scores.top('pacman').then(rows => Scores.render(document.getElementById('pacBoard'), rows));
