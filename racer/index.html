@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Grand Prix</title>
+<link rel="stylesheet" href="../common/arcade.css">
+<style>
+  #modes { display: flex; gap: 10px; margin: 8px 0; }
+  #modes button { font: inherit; padding: 6px 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>GRAND PRIX</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="400"></canvas>
+<div id="modes">
+  <button id="manualBtn">1 · Manual gears (ranked)</button>
+  <button id="autoBtn">2 · Auto gears (practice, no score)</button>
+</div>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. Roll steers like a wheel (the further, the harder),
+  tip forward (pitch down) for gas, tip back to brake. In Manual, flick to shift between LO and HI: LO pulls away, HI
+  is needed for top speed. Take curves too fast and you slide wide; hitting a car or a roadside sign is a crash.
+  Qualify on the first lap, then race 4 laps against the clock; each lap adds time. Only Manual games played with the
+  MUGIC are posted. Keyboard (practice): ← → steer, ↑ gas, ↓ brake, space shift, 1/2 start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const DEADZONE = 2, PEDAL_DEADZONE = 4;
+let range = 20;
+try { range = +localStorage.getItem('mugicRacerRange') || 20; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → ↑ ↓ space',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full lock/throttle at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicRacerRange', range); } catch (e) {}
+};
+
+// ---------- Track (pseudo-3D: a list of road segments, each with a curve and a height) ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const SEG = 200, RUMBLE = 3, ROAD_W = 2000, CAM_H = 1000, DRAW = 220;
+const CAM_DEPTH = 1 / Math.tan(50 * Math.PI / 180), PLAYER_Z = CAM_H * CAM_DEPTH;
+const MAX = SEG * 60, CENTRIFUGAL = 0.3, CAR_W = 560, CAR_HALF = CAR_W / ROAD_W / 2;
+const LAPS = 4, QUAL_LIMIT = 75, RACE_TIME = 70, LAP_EXT = 46;
+const QUAL_GRID = [44, 46, 48, 50, 52, 55, 58, 62];        // lap time (s) needed for grid slot 1..8
+const QUAL_BONUS = [4000, 2000, 1400, 1000, 800, 600, 400, 200];
+
+const segments = [];
+const lastY = () => segments.length ? segments[segments.length - 1].p2.world.y : 0;
+const easeIn = (a, b, t) => a + (b - a) * t * t, easeInOut = (a, b, t) => a + (b - a) * (-Math.cos(t * Math.PI) / 2 + 0.5);
+function addSegment(curve, y) {
+  const i = segments.length;
+  segments.push({ index: i, curve, sprites: [], p1: { world: { y: lastY(), z: i * SEG } }, p2: { world: { y, z: (i + 1) * SEG } },
+    light: Math.floor(i / RUMBLE) % 2 === 0 });
+}
+function addRoad(enter, hold, leave, curve, hill) {
+  const y0 = lastY(), y1 = y0 + hill * SEG, n = enter + hold + leave;
+  for (let i = 0; i < enter; ++i) addSegment(easeIn(0, curve, i / enter), easeInOut(y0, y1, i / n));
+  for (let i = 0; i < hold; ++i) addSegment(curve, easeInOut(y0, y1, (enter + i) / n));
+  for (let i = 0; i < leave; ++i) addSegment(easeInOut(curve, 0, i / leave), easeInOut(y0, y1, (enter + hold + i) / n));
+}
+// one circuit, loosely after Fuji: long start straight, a first hairpin, esses, the back straight, the last corners
+addRoad(0, 280, 0, 0, 0);
+addRoad(60, 110, 60, 5, 0);
+addRoad(50, 100, 50, 0, 20);
+addRoad(50, 90, 50, -3, -20);
+addRoad(0, 90, 0, 0, 0);
+addRoad(40, 60, 40, 3, 10);
+addRoad(40, 60, 40, -3, -10);
+addRoad(60, 200, 60, 0, 30);
+addRoad(60, 180, 60, 2.5, -30);
+addRoad(0, 100, 0, 0, 0);
+addRoad(50, 70, 50, -2, 0);
+addRoad(40, 70, 40, 5, 0);
+addRoad(60, 120, 60, 0, -lastY() / SEG);
+const L = segments.length * SEG;
+segments.forEach((s, i) => {
+  if (i < 6) return;
+  if (s.curve && i % 8 === 0) s.sprites.push({ kind: 'sign', offset: -Math.sign(s.curve) * 1.3, w: 0.5 });   // outside of the bend
+  if (i % 23 === 0) for (const side of [-1, 1]) s.sprites.push({ kind: 'tree', offset: side * (1.6 + Math.random() * 1.6), w: 0.35 });
+});
+const segAt = z => segments[Math.floor(((z % L) + L) % L / SEG)];
+
+// ---------- Game state ----------
+const game = { state: 'title', score: 0, hi: 0 };
+try { game.hi = +localStorage.getItem('mugicRacerHi') || 0; } catch (e) {}
+const keys = {};
+const COLORS = ['#ffe14d', '#4d7bff', '#4dff88', '#ff9f3a', '#c05cff', '#3ff0ff', '#e8e8e8'];
+
+function newGame(mode) {
+  Object.assign(game, { state: 'play', mode, keyboard: false, score: 0, passes: 0, skyX: 0 });
+  startPhase('qualify');
+}
+
+function startPhase(phase, grid) {
+  Object.assign(game, { phase, pos: 0, playerX: 0, speed: 0, gear: 'LO', lap: 0, lapTime: 0, crash: 0 });
+  if (phase === 'qualify') {
+    game.time = QUAL_LIMIT; game.countdown = 0; game.msg = { text: 'PREPARE TO QUALIFY', t: 2.5 };
+    game.cars = COLORS.slice(0, 5).map((color, i) => ({ color, z: (i + 1) * L / 6, lap: 0, offset: [-0.5, 0.4, 0, 0.6, -0.3][i], speed: MAX * (0.45 + 0.1 * Math.random()) }));
+  } else {
+    // grid: 8 slots two abreast, slot 1 in front; the player takes their qualifying slot
+    const slotZ = k => SEG * (12 + 5 * (8 - k)), slotX = k => (k % 2 ? -0.45 : 0.45);
+    game.cars = [];
+    for (let k = 1, c = 0; k <= 8; ++k) {
+      if (k === grid) continue;
+      game.cars.push({ color: COLORS[c++], z: slotZ(k), lap: 0, offset: slotX(k), speed: MAX * (0.9 - 0.035 * k + 0.04 * Math.random()) });
+    }
+    game.pos = slotZ(grid) - PLAYER_Z; game.playerX = slotX(grid);
+    game.time = RACE_TIME; game.countdown = 3; game.msg = { text: 'PREPARE TO RACE', t: 2.5 };
+  }
+  game.cars.forEach(c => { c.ahead = true; });
+}
+
+// ---------- Update ----------
+function update(dt) {
+  if (game.msg && (game.msg.t -= dt) <= 0) game.msg = null;
+  if (game.countdown > 0) { game.countdown -= dt; return; }
+  game.time -= dt;
+  game.lapTime += dt;
+  if (game.time <= 0) {
+    game.time = 0;
+    endGame(game.phase === 'qualify' ? 'DID NOT QUALIFY' : 'TIME UP');
+    return;
+  }
+
+  for (const c of game.cars) {
+    const z = c.z + c.speed * dt;
+    if (z >= L) ++c.lap;
+    c.z = z % L;
+  }
+
+  const p = game.speed / MAX, seg = segAt(game.pos + PLAYER_Z);
+  if (game.crash > 0) {
+    if ((game.crash -= dt) <= 0) { game.crash = 0; game.playerX = Math.max(-0.8, Math.min(0.8, game.playerX)); }
+    return;
+  }
+
+  // controls: roll = wheel, pitch forward = gas, pitch back = brake
+  const kb = keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown;
+  if (kb) game.keyboard = true;
+  const steer = keys.ArrowLeft ? -1 : keys.ArrowRight ? 1
+    : Mugic.connected && Math.abs(Mugic.roll) > DEADZONE ? Math.max(-1, Math.min(1, Mugic.roll / range)) : 0;
+  const gas = keys.ArrowUp ? 1 : Mugic.connected && -Mugic.pitch > PEDAL_DEADZONE ? Math.min(1, -Mugic.pitch / range) : 0;
+  const brake = keys.ArrowDown ? 1 : Mugic.connected && Mugic.pitch > PEDAL_DEADZONE ? Math.min(1, Mugic.pitch / range) : 0;
+
+  if (game.mode === 'auto') game.gear = p > 0.58 ? 'HI' : p < 0.45 ? 'LO' : game.gear;
+  // LO pulls hard but tops out at 60%; HI bogs down below 35% and reaches full speed
+  const accel = game.gear === 'LO' ? (p < 0.55 ? 0.45 : p < 0.6 ? 0.05 : -0.3) : (p < 0.35 ? 0.06 : 0.22);
+  game.speed += (gas * accel * MAX - brake * 1.2 * MAX - (gas ? 0 : 0.15 * MAX)) * dt;
+  if (game.gear === 'LO' && p > 0.6) game.speed -= 0.3 * MAX * dt;
+  if (Math.abs(game.playerX) > 1 && game.speed > MAX / 4) game.speed -= 0.9 * MAX * dt;   // grass
+  game.speed = Math.max(0, Math.min(MAX, game.speed));
+
+  const dx = dt * 2.4 * p;
+  game.playerX += steer * dx - dx * p * seg.curve * CENTRIFUGAL;
+  game.playerX = Math.max(-2.6, Math.min(2.6, game.playerX));
+  game.skyX += seg.curve * p * dt * 0.01;
+
+  const before = game.pos;
+  game.pos = (game.pos + game.speed * dt) % L;
+  game.score += game.speed * dt / SEG * 5;
+  if (game.pos < before) lapDone();
+
+  // collisions: roadside sprites when off the road, cars when catching them
+  const pz = game.pos + PLAYER_Z, ps = segAt(pz);
+  if (Math.abs(game.playerX) > 1 && ps.sprites.some(s => Math.abs(s.offset - game.playerX) < CAR_HALF + s.w / 2)) crash();
+  for (const c of game.cars) {
+    const gap = ((c.z - pz) % L + L) % L;
+    if (game.speed > c.speed && gap < SEG * 0.6 && Math.abs(c.offset - game.playerX) < CAR_HALF * 2) { crash(); game.speed = 0; break; }
+    // rivals ease aside when the player is right behind
+    if (gap < SEG * 15 && Math.abs(c.offset - game.playerX) < 0.4) c.offset += Math.sign(c.offset - game.playerX || 1) * 0.25 * dt;
+    c.offset = Math.max(-0.8, Math.min(0.8, c.offset));
+    if (game.phase === 'race') {
+      const ahead = c.lap * L + c.z > game.lap * L + pz;
+      if (c.ahead && !ahead) { game.score += 500; ++game.passes; }
+      c.ahead = ahead;
+    }
+  }
+}
+
+function crash() { game.crash = 2.5; game.speed = 0; }
+
+function lapDone() {
+  if (game.phase === 'qualify') {
+    const grid = QUAL_GRID.findIndex(t => game.lapTime <= t) + 1;
+    game.qualTime = game.lapTime;
+    if (!grid) { endGame('DID NOT QUALIFY'); return; }
+    game.score += QUAL_BONUS[grid - 1]; game.grid = grid;
+    startPhase('race', grid);
+    game.msg = { text: `QUALIFIED P${grid}  ${game.qualTime.toFixed(2)}s`, t: 3 };
+    return;
+  }
+  if (game.lap === 0 && game.lapTime < 5) return;      // crossing the line from the grid
+  ++game.lap; game.lapTime = 0;
+  if (game.lap >= LAPS) { game.score += Math.floor(game.time) * 200; endGame('GOAL!'); return; }
+  game.time += LAP_EXT; game.msg = { text: 'EXTENDED TIME', t: 2 };
+}
+
+const ranked = () => game.mode === 'manual' && !game.keyboard;
+function endGame(text) {
+  game.state = 'over'; game.endText = text;
+  const score = Math.floor(game.score);
+  if (score > game.hi) { game.hi = score; try { localStorage.setItem('mugicRacerHi', game.hi); } catch (e) {} }
+  if (score > 0 && ranked()) Scores.submit({ game: 'racer', score }).then(showBoard);
+}
+const showBoard = () => Scores.top('racer').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+// ---------- Input ----------
+const shift = () => { if (game.state === 'play' && game.mode === 'manual' && !game.crash) game.gear = game.gear === 'LO' ? 'HI' : 'LO'; };
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state !== 'play') newGame(game.mode || 'manual'); else shift();
+};
+$('manualBtn').onclick = () => { if (!Scores.busy()) newGame('manual'); };
+$('autoBtn').onclick = () => { if (!Scores.busy()) newGame('auto'); };
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'Space') { if (game.state === 'play') { game.keyboard = true; shift(); } e.preventDefault(); }
+  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (game.state !== 'play' && (e.code === 'Digit1' || e.code === 'Digit2')) newGame(e.code === 'Digit1' ? 'manual' : 'auto');
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- Rendering ----------
+function project(p, camX, camY, camZ) {
+  const cz = p.world.z - camZ, s = CAM_DEPTH / cz;
+  p.cz = cz; p.scale = s;
+  p.x = Math.round(W / 2 + s * -camX * W / 2);
+  p.y = Math.round(H / 2 - s * (p.world.y - camY) * H / 2);
+  p.w = Math.round(s * ROAD_W * W / 2);
+}
+
+function quad(x1, y1, x2, y2, x3, y3, x4, y4, color) {
+  ctx.fillStyle = color; ctx.beginPath();
+  ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.lineTo(x4, y4); ctx.closePath(); ctx.fill();
+}
+
+function drawSegment(s, a, b) {
+  const start = s.index < 3;
+  ctx.fillStyle = s.light ? '#16a316' : '#0f8f0f'; ctx.fillRect(0, b.y, W, a.y - b.y);
+  const r1 = a.w / 6, r2 = b.w / 6, rumble = s.light ? '#e8e8e8' : '#d02020';
+  quad(a.x - a.w - r1, a.y, a.x - a.w, a.y, b.x - b.w, b.y, b.x - b.w - r2, b.y, rumble);
+  quad(a.x + a.w + r1, a.y, a.x + a.w, a.y, b.x + b.w, b.y, b.x + b.w + r2, b.y, rumble);
+  quad(a.x - a.w, a.y, a.x + a.w, a.y, b.x + b.w, b.y, b.x - b.w, b.y, start ? (s.index % 2 ? '#111' : '#eee') : s.light ? '#6e6e6e' : '#686868');
+  if (s.light && !start) for (const k of [-1 / 3, 1 / 3]) {
+    const l1 = a.w / 40, l2 = b.w / 40;
+    quad(a.x + k * a.w * 2 - l1, a.y, a.x + k * a.w * 2 + l1, a.y, b.x + k * b.w * 2 + l2, b.y, b.x + k * b.w * 2 - l2, b.y, '#ddd');
+  }
+}
+
+function drawCar(x, y, w, color) {
+  const h = w * 0.42;
+  ctx.fillStyle = '#111';
+  ctx.fillRect(x - w / 2, y - h * 0.75, w * 0.24, h * 0.75); ctx.fillRect(x + w / 2 - w * 0.24, y - h * 0.75, w * 0.24, h * 0.75);
+  ctx.fillStyle = color; ctx.fillRect(x - w * 0.27, y - h * 0.62, w * 0.54, h * 0.5);
+  ctx.fillStyle = '#222'; ctx.fillRect(x - w * 0.1, y - h * 0.86, w * 0.2, h * 0.28);
+  ctx.fillStyle = color; ctx.fillRect(x - w * 0.42, y - h, w * 0.84, h * 0.18);
+  ctx.fillStyle = '#ff5050'; ctx.fillRect(x - w * 0.2, y - h * 0.2, w * 0.08, h * 0.08); ctx.fillRect(x + w * 0.12, y - h * 0.2, w * 0.08, h * 0.08);
+}
+
+function drawSprite(sp, x, y, w) {
+  if (sp.kind === 'tree') {
+    ctx.fillStyle = '#5a3a1a'; ctx.fillRect(x - w * 0.08, y - w * 0.5, w * 0.16, w * 0.5);
+    ctx.fillStyle = '#0a5a1e'; ctx.beginPath(); ctx.moveTo(x, y - w * 2); ctx.lineTo(x + w / 2, y - w * 0.4); ctx.lineTo(x - w / 2, y - w * 0.4); ctx.fill();
+  } else {
+    ctx.fillStyle = '#ccc'; ctx.fillRect(x - w * 0.4, y - w * 0.5, w * 0.05, w * 0.5); ctx.fillRect(x + w * 0.35, y - w * 0.5, w * 0.05, w * 0.5);
+    ctx.fillStyle = '#ffe14d'; ctx.fillRect(x - w / 2, y - w * 0.95, w, w * 0.45);
+    if (w > 30) { ctx.fillStyle = '#d02020'; ctx.font = `bold ${Math.round(w * 0.22)}px ui-monospace, Menlo, monospace`; ctx.textAlign = 'center'; ctx.fillText('MUGIC', x, y - w * 0.63); }
+  }
+}
+
+function drawBackground() {
+  const sky = ctx.createLinearGradient(0, 0, 0, H / 2);
+  sky.addColorStop(0, '#1a4fa8'); sky.addColorStop(1, '#8fc4ff');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  const span = W * 1.6, mx = ((W * 0.7 - game.skyX * W) % span + span) % span - W * 0.3, hy = H / 2 + 4;
+  ctx.fillStyle = '#4a5f8a'; ctx.beginPath(); ctx.moveTo(mx - 170, hy); ctx.lineTo(mx, hy - 95); ctx.lineTo(mx + 170, hy); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(mx - 40, hy - 72); ctx.lineTo(mx, hy - 95); ctx.lineTo(mx + 40, hy - 72);
+  ctx.lineTo(mx + 18, hy - 66); ctx.lineTo(mx, hy - 74); ctx.lineTo(mx - 18, hy - 66); ctx.fill();
+  ctx.fillStyle = '#0f8f0f'; ctx.fillRect(0, hy, W, H - hy);
+}
+
+function drawRoad() {
+  const base = segAt(game.pos), pct = (game.pos % SEG) / SEG;
+  const ps = segAt(game.pos + PLAYER_Z), ppct = ((game.pos + PLAYER_Z) % SEG) / SEG;
+  const camY = CAM_H + ps.p1.world.y + (ps.p2.world.y - ps.p1.world.y) * ppct;
+  let maxy = H, x = 0, dx = -base.curve * pct;
+  const visible = [];
+  for (let n = 0; n < DRAW; ++n) {
+    const s = segments[(base.index + n) % segments.length], loop = s.index < base.index ? L : 0;
+    project(s.p1, game.playerX * ROAD_W - x, camY, game.pos - loop);
+    project(s.p2, game.playerX * ROAD_W - x - dx, camY, game.pos - loop);
+    x += dx; dx += s.curve;
+    s.clip = maxy; s.n = n;
+    visible.push(s);
+    if (s.p1.cz <= CAM_DEPTH || s.p2.y >= s.p1.y || s.p2.y >= maxy) continue;
+    drawSegment(s, s.p1, s.p2);
+    maxy = s.p1.y;
+  }
+  // sprites and cars back to front, clipped behind hills
+  const carsBySeg = new Map();
+  for (const c of game.cars) { const i = segAt(c.z).index; (carsBySeg.get(i) || carsBySeg.set(i, []).get(i)).push(c); }
+  for (let n = visible.length - 1; n > 0; --n) {
+    const s = visible[n];
+    if (s.p1.cz <= CAM_DEPTH) continue;
+    ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W, s.clip); ctx.clip();
+    for (const sp of s.sprites) drawSprite(sp, s.p1.x + s.p1.scale * sp.offset * ROAD_W * W / 2, s.p1.y, s.p1.scale * sp.w * ROAD_W * W / 2);
+    for (const c of carsBySeg.get(s.index) || []) {
+      const t = (c.z % SEG) / SEG, sc = s.p1.scale + (s.p2.scale - s.p1.scale) * t;
+      const cx = s.p1.x + (s.p2.x - s.p1.x) * t + sc * c.offset * ROAD_W * W / 2, cy = s.p1.y + (s.p2.y - s.p1.y) * t;
+      drawCar(cx, cy, sc * CAR_W * W / 2, c.color);
+    }
+    ctx.restore();
+  }
+}
+
+function hud() {
+  ctx.textAlign = 'left'; ctx.font = 'bold 14px ui-monospace, Menlo, monospace';
+  const label = (t, v, x, color = '#fff') => { ctx.fillStyle = '#ff5050'; ctx.fillText(t, x, 18); ctx.fillStyle = color; ctx.fillText(v, x, 36); };
+  label('TIME', String(Math.ceil(game.time)), 12, game.time < 10 ? '#ff5050' : '#ffe14d');
+  label('SCORE', String(Math.floor(game.score)), 80);
+  label('HI', String(game.hi), 190);
+  if (game.phase === 'qualify') label('LAP', game.lapTime.toFixed(1), 290);
+  else {
+    const place = 1 + game.cars.filter(c => c.lap * L + c.z > game.lap * L + game.pos + PLAYER_Z).length;
+    label('LAP', `${Math.min(LAPS, game.lap + 1)}/${LAPS}`, 290); label('POS', String(place), 370);
+  }
+  label('SPEED', Math.round(game.speed / MAX * 290) + ' km', 440);
+  ctx.fillStyle = game.gear === 'HI' ? '#ffe14d' : '#4dff88'; ctx.fillRect(560, 6, 66, 34);
+  ctx.fillStyle = '#000'; ctx.font = 'bold 20px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center'; ctx.fillText(game.gear, 593, 31);
+  if (!ranked()) { ctx.fillStyle = '#fff'; ctx.font = '11px ui-monospace, Menlo, monospace'; ctx.fillText(game.mode === 'auto' ? 'AUTO · PRACTICE (NOT RANKED)' : 'KEYBOARD · NOT RANKED', W / 2, 54); }
+}
+
+function draw() {
+  drawBackground();
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.font = 'bold 40px ui-monospace, Menlo, monospace'; ctx.fillText('GRAND PRIX', W / 2, 130);
+    ctx.font = '16px ui-monospace, Menlo, monospace';
+    ctx.fillText('FLICK or 1 = MANUAL GEARS (ranked)', W / 2, 250); ctx.fillText('2 = AUTO GEARS (practice)', W / 2, 276);
+    return;
+  }
+  drawRoad();
+  const bounce = game.speed > 0 && !game.crash ? (Math.random() - 0.5) * 2 * game.speed / MAX : 0;
+  if (game.crash > 0) {
+    for (let i = 0; i < 6; ++i) { ctx.fillStyle = ['#ff9f3a', '#ffe14d', '#ff4d4d'][i % 3]; ctx.beginPath();
+      ctx.arc(W / 2 + Math.sin(i * 2.1 + game.crash * 9) * 50, H - 50 + Math.cos(i * 1.7 + game.crash * 7) * 25, 18 + 14 * Math.sin(game.crash * 5 + i), 0, Math.PI * 2); ctx.fill(); }
+  } else drawCar(W / 2, H - 10 + bounce, CAR_W * W / 2 / CAM_H * 0.62, '#ff3030');
+  hud();
+  ctx.textAlign = 'center';
+  if (game.countdown > 0) {
+    const lit = 3 - Math.ceil(game.countdown);
+    for (let i = 0; i < 3; ++i) { ctx.fillStyle = i <= lit ? (lit >= 2 && i === 2 ? '#4dff88' : '#ff4d4d') : '#333'; ctx.beginPath(); ctx.arc(W / 2 - 40 + i * 40, 110, 14, 0, Math.PI * 2); ctx.fill(); }
+  }
+  if (game.msg) { ctx.fillStyle = '#ffe14d'; ctx.font = 'bold 22px ui-monospace, Menlo, monospace'; ctx.fillText(game.msg.text, W / 2, 160); }
+  if (game.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 140, W, 90);
+    ctx.fillStyle = game.endText === 'GOAL!' ? '#4dff88' : '#ff5a5a'; ctx.font = 'bold 30px ui-monospace, Menlo, monospace'; ctx.fillText(game.endText, W / 2, 180);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace';
+    ctx.fillText(ranked() ? 'flick, 1 or 2 to race again' : 'practice — score not posted · 1 or 2 to race again', W / 2, 210);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
