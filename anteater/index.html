@@ -24,6 +24,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const DEADZONE = 2;
+const EXTEND_SPEED = 9, RETRACT_SPEED = 20;   // tiles/s: tongue at full tilt; flick snap-back (finite, ants can still bite)
 let range = 15;
 try { range = +localStorage.getItem('mugicAnteaterRange') || 15; } catch (e) {}
 Mugic.mountPanel($('bar'), $('tuning'), {
@@ -105,14 +106,14 @@ function stepTongue(dir) {
 function updateTongue(dt) {
   if (input.retract) { game.retracting = true; input.retract = false; }
   if (game.retracting) {
-    game.stepAcc += 30 * dt;
+    game.stepAcc += RETRACT_SPEED * dt;
     while (game.stepAcc >= 1 && game.tongue.length > 1) { game.tongue.pop(); --game.stepAcc; }
     if (game.tongue.length === 1) { game.retracting = false; game.stepAcc = 0; }
     return;
   }
   const s = stick();
   if (!s) { game.stepAcc = 0; return; }
-  game.stepAcc += s.speed * 9 * dt;
+  game.stepAcc += s.speed * EXTEND_SPEED * dt;
   while (game.stepAcc >= 1) { stepTongue(s.dir); --game.stepAcc; }
 }
 
