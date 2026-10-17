@@ -14,7 +14,7 @@ const GAMES = [
   { id: 'lander', name: 'Moon Lander', blurb: 'Lunar Lander: roll to turn, tip forward to throttle, land softly.' },
   { id: 'racer', name: 'Grand Prix', blurb: 'Pole Position-style: roll steers, pitch is gas/brake, flick shifts LO/HI.' },
   { id: 'kungfu', name: 'Dragon Tower', blurb: 'Kung-Fu Master-style: roll walks, tip down crouch / up jump, flick strikes, shake off grabbers.' },
-  { id: 'toss', name: 'Paper Toss', blurb: 'Throw for real: point to aim, tip up to lob, twist for spin, throw harder to go further.', board: 'LONGEST STREAK' },
+  { id: 'toss', name: 'Paper Fling', blurb: 'Throw for real: point to aim, tip up to lob, twist for spin, throw harder to go further.', board: 'LONGEST STREAK' },
   { id: 'chopper', name: 'Rescue Chopper', blurb: 'Choplifter-style: roll and pitch fly, hover to bomb, flick fires; land to rescue hostages.' },
   { id: 'sokoban', name: 'Warehouse', short: 'WAREHOUSE HARD', blurb: 'Flick left/right/up/down to step and push crates, undo with a button.', board: 'LEVEL RECORDS', levels: 25 },
 ];

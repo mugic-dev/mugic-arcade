@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MUGIC Paper Toss</title>
+<title>MUGIC Paper Fling</title>
 <link rel="stylesheet" href="../common/arcade.css">
 </head>
 <body>
 <a class="back" href="../">← arcade</a>
-<h1>PAPER TOSS</h1>
+<h1>PAPER FLING</h1>
 <div id="bar"></div>
 <canvas id="game" width="640" height="420"></canvas>
 <div class="scores"><h3>GLOBAL TOP 10 — LONGEST STREAK</h3><div id="board"></div></div>
@@ -209,7 +209,7 @@ function draw() {
   ctx.textAlign = 'left'; ctx.fillStyle = '#222'; ctx.font = 'bold 16px ui-monospace, Menlo, monospace';
   ctx.fillText('STREAK ' + game.streak, 12, 26); ctx.fillText('BEST ' + game.hi, 12, 48);
   if (game.state === 'title') {
-    ctx.textAlign = 'center'; ctx.font = 'bold 40px ui-monospace, Menlo, monospace'; ctx.fillText('PAPER TOSS', W / 2, 150);
+    ctx.textAlign = 'center'; ctx.font = 'bold 40px ui-monospace, Menlo, monospace'; ctx.fillText('PAPER FLING', W / 2, 150);
     ctx.font = '16px ui-monospace, Menlo, monospace'; ctx.fillText('FLICK OR PRESS SPACE', W / 2, 190);
     return;
   }
