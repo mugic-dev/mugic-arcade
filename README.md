@@ -2,6 +2,11 @@
 
 Browser games played with a MUGIC as the controller over Web Bluetooth. `index.html` is the game menu.
 
+**Play:** <https://mugic-dev.github.io/mugic-arcade/> (Chrome or Edge; needs a MUGIC on firmware ≥ 2.2.0 in BLE output mode).
+It is served by GitHub Pages straight from `main` (repo root): a push to `main` is live in about a minute.
+`.github/workflows/keepalive.yml` reads one score daily so the free Supabase project never pauses for inactivity
+(GitHub turns scheduled workflows off after 60 days without commits in a public repo — re-enable it from the Actions tab).
+
 | Game | Folder | Controls |
 |---|---|---|
 | Invaders | `invaders/` | **Roll** → cannon speed, like a proportional joystick (`Full speed at` = roll for max speed, default 15°); **flick** fires |
