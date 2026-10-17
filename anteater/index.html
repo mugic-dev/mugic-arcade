@@ -17,7 +17,7 @@
   goes. Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
   over. Ants keep to their tunnel, mostly poking in from the edge and back out. Only the tip eats: an ant touching the
   tongue anywhere else bites. Eat worms from behind, never head-on.
-  The two queens (bottom tunnel) each clear every insect for a while; the spider comes out at night. Keyboard (any time, for testing — that game isn't posted to the global board): arrows, space = retract, Enter = start.</p>
+  The two queens sit in the bottom tunnel: eating one clears every insect for a while (she's back 20 s later); the spider comes out at night. Keyboard (any time, for testing — that game isn't posted to the global board): arrows, hold space = retract (let go to stop), Enter = start. With the MUGIC, a flick starts the retract and another flick stops it.</p>
 
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
@@ -25,7 +25,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const DEADZONE = 2;
-const EXTEND_SPEED = 7, RETRACT_SPEED = 20;   // tiles/s: tongue at full tilt; flick snap-back (finite, ants can still bite)
+const EXTEND_SPEED = 7, RETRACT_SPEED = 12;   // tiles/s: tongue at full tilt; fast retract (finite, ants can still bite)
 let range = 15;
 try { range = +localStorage.getItem('mugicAnteaterRange') || 15; } catch (e) {}
 Mugic.mountPanel($('bar'), $('tuning'), {
@@ -42,7 +42,7 @@ $('range').oninput = e => {
 // ---------- Anthill ----------
 // Horizontal tunnels joined by shafts; tunnel ends at the screen edges are where insects come and go.
 const COLS = 25, ROWS = 14, T = 24, SKY = 86, TOP = SKY + 30;
-const TUNNEL_ROWS = [1, 4, 7, 10, 13], QUEEN_ROW = 13;
+const TUNNEL_ROWS = [1, 4, 7, 10, 13], QUEEN_SPOTS = [[5, 13], [19, 13]], QUEEN_BACK = 20;
 const SHAFTS = { 1: [2, 8, 16, 22], 4: [5, 12, 19], 7: [2, 9, 15, 22], 10: [6, 12, 18] };   // from row r down to the next tunnel
 const ENTRANCE = [12, 0];
 const open = new Set();
@@ -59,7 +59,7 @@ const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
 const game = { state: 'title', score: 0, hi: 0, lives: 3, level: 1 };
 try { game.hi = +localStorage.getItem('mugicAnteaterHi') || 0; } catch (e) {}
 const keys = { dir: null };
-const input = { retract: false };
+const input = { toggleRetract: false };
 
 function newGame() { game.score = 0; game.lives = 3; game.level = 1; game.keyboard = false; newLevel(); }
 
@@ -74,8 +74,9 @@ const NIGHT = 20;
 function newDay() {
   game.tongue = [ENTRANCE.slice()];
   game.stepAcc = 0; game.retracting = false;
-  game.ants = []; game.worms = []; game.queens = []; game.spider = null;
-  game.clock = 0; game.calm = 0; game.spawnAnt = 1; game.spawnWorm = 6; game.spawnQueen = 15;
+  game.ants = []; game.worms = []; game.spider = null;
+  game.queens = QUEEN_SPOTS.map(([x, y]) => ({ x, y, away: 0 }));   // static; `away` counts down after one is eaten
+  game.clock = 0; game.calm = 0; game.spawnAnt = 1; game.spawnWorm = 6;
   game.state = 'ready'; game.timer = 1.5;
 }
 
@@ -113,13 +114,15 @@ function stepTongue(dir) {
 }
 
 function updateTongue(dt) {
-  if (input.retract) { game.retracting = true; input.retract = false; }
-  if (game.retracting) {
+  // fast retract like the arcade button: runs while space is held, or between two flicks
+  if (input.toggleRetract) { game.retracting = !game.retracting; input.toggleRetract = false; }
+  if ((game.retracting || keys.retract) && game.tongue.length > 1) {
     game.stepAcc += RETRACT_SPEED * dt;
     while (game.stepAcc >= 1 && game.tongue.length > 1) { game.tongue.pop(); --game.stepAcc; }
     if (game.tongue.length === 1) { game.retracting = false; game.stepAcc = 0; }
     return;
   }
+  game.retracting = false;
   const s = stick();
   if (!s) { game.stepAcc = 0; return; }
   game.stepAcc += s.speed * EXTEND_SPEED * dt;
@@ -138,9 +141,9 @@ function eatAt(x, y) {
     if (hit > 0) { w.dead = true; game.score += 200; }
   }
   game.worms = game.worms.filter(w => !w.dead);
-  const q = game.queens.findIndex(c => c.x === x && c.y === y);
-  if (q >= 0) {
-    game.score += 1000; game.queens.splice(q, 1);
+  const q = game.queens.find(c => c.away <= 0 && c.x === x && c.y === y);
+  if (q) {
+    game.score += 1000; q.away = QUEEN_BACK;
     game.ants = []; game.worms = []; game.spider = null; game.calm = 6;
   }
 }
@@ -177,9 +180,6 @@ function updateCritters(dt) {
       game.worms.push({ dir: w.dir, acc: 0, body: [[w.x, w.y], [w.x - w.dir[0], w.y], [w.x - 2 * w.dir[0], w.y]] });
       game.spawnWorm = 10;
     }
-    if ((game.spawnQueen -= dt) <= 0 && game.queens.length < 2) {   // up to two queens in the bottom tunnel
-      game.queens.push({ ...spawnFromEdge([QUEEN_ROW]), acc: 0 }); game.spawnQueen = 9;
-    }
     if (night() && !game.spider) game.spider = { ...spawnFromEdge([1]), acc: 0 };
   }
 
@@ -209,19 +209,15 @@ function updateCritters(dt) {
   }
   game.worms = game.worms.filter(w => !w.gone);
 
-  for (const c of [...game.queens, game.spider]) {
-    if (!c) continue;
-    const queen = c !== game.spider;
-    c.acc += (queen ? 1.4 : 3) * dt;
-    while (c.acc >= 1) {
-      --c.acc; c.x += c.dir[0];
-      if (c.x < 0 || c.x >= COLS) {
-        if (queen) { game.queens = game.queens.filter(x => x !== c); break; }
-        c.dir = [-c.dir[0], 0]; c.x += 2 * c.dir[0];    // the spider patrols the top tunnel
-      }
-      if (c === game.spider && inTongue(c.x, c.y)) { die(); return; }
-      const [tx, ty] = tip();
-      if (queen && c.x === tx && c.y === ty) { eatAt(tx, ty); break; }
+  game.queens.forEach(q => { if (q.away > 0) q.away -= dt; });
+
+  const sp = game.spider;                             // the spider patrols the top tunnel
+  if (sp) {
+    sp.acc += 3 * dt;
+    while (sp.acc >= 1) {
+      --sp.acc; sp.x += sp.dir[0];
+      if (sp.x < 0 || sp.x >= COLS) { sp.dir = [-sp.dir[0], 0]; sp.x += 2 * sp.dir[0]; }
+      if (inTongue(sp.x, sp.y)) { die(); return; }
     }
   }
 }
@@ -252,18 +248,19 @@ showBoard();
 Mugic.onFlick = () => {
   if (Scores.busy()) return;
   if (game.state === 'title' || game.state === 'over') newGame();
-  else input.retract = true;
+  else input.toggleRetract = true;
 };
 addEventListener('keydown', e => {
   if (Scores.busy()) return;
   const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
   if (d) { keys.dir = DIRS[d]; e.preventDefault(); }
-  if (e.code === 'Space') { input.retract = true; e.preventDefault(); }
+  if (e.code === 'Space') { keys.retract = true; e.preventDefault(); }
   if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
 });
 addEventListener('keyup', e => {
   const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
   if (d && keys.dir === DIRS[d]) keys.dir = null;
+  if (e.code === 'Space') keys.retract = false;
 });
 
 // ---------- Drawing ----------
@@ -340,7 +337,7 @@ function draw() {
     w.body.forEach(([x, y], i) => { ctx.fillStyle = i === 0 ? '#ff9a3a' : '#e8b07a'; ctx.beginPath(); ctx.arc(cx(x), cy(y), i === 0 ? 8 : 7, 0, Math.PI * 2); ctx.fill(); });
     const [hx, hy] = w.body[0]; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(cx(hx) + w.dir[0] * 3, cy(hy) - 2, 1.8, 0, Math.PI * 2); ctx.fill();
   });
-  game.queens.forEach(q => drawBug(cx(q.x), cy(q.y), '#ffd24a', 10, true));
+  game.queens.forEach(q => { if (q.away <= 0) drawBug(cx(q.x), cy(q.y), '#ffd24a', 10, true); });
   if (game.spider) drawBug(cx(game.spider.x), cy(game.spider.y), '#b05cff', 10, true);
 
   ctx.textAlign = 'center'; ctx.font = '18px ui-monospace, Menlo, monospace';
