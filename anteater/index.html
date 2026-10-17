@@ -15,7 +15,8 @@
 <div id="tuning"></div>
 <p class="help">Steer the tongue's tip through the anthill: roll right/left, pitch up/down, the further you tilt the faster it
   goes. Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
-  over. Only the tip eats: an ant touching the tongue anywhere else bites. Eat worms from behind, never head-on.
+  over. Ants keep to their tunnel, mostly poking in from the edge and back out. Only the tip eats: an ant touching the
+  tongue anywhere else bites. Eat worms from behind, never head-on.
   The two queens (bottom tunnel) each clear every insect for a while; the spider comes out at night. Keyboard: arrows, space = retract.</p>
 
 <script src="../common/mugic.js"></script>
@@ -136,16 +137,13 @@ function eatAt(x, y) {
   }
 }
 
-// An ant walks its tunnel; at a shaft it may turn into it; it leaves at the screen edge.
+// Ants keep to their tunnel level: most walk in from their edge to a turning point and back out;
+// some cross the whole way. They leave when they step past the screen edge.
+const CROSS_CHANCE = 0.25;
 function moveAnt(a) {
-  const options = Object.values(DIRS).filter(d => !(d[0] === -a.dir[0] && d[1] === -a.dir[1]) && (isOpen(a.x + d[0], a.y + d[1]) || offEdge(a.x + d[0], a.y + d[1])));
-  const vertical = options.filter(d => d[1] !== 0 && !(a.x === ENTRANCE[0] && a.y + d[1] === 0));
-  const straight = options.find(d => d[0] === a.dir[0] && d[1] === a.dir[1]);
-  a.dir = vertical.length && Math.random() < 0.35 ? vertical[Math.floor(Math.random() * vertical.length)]
-        : straight || options.filter(d => !(a.x === ENTRANCE[0] && a.y + d[1] === 0))[0] || [-a.dir[0], -a.dir[1]];
-  a.x += a.dir[0]; a.y += a.dir[1];
+  if (a.turnAt != null && a.x === a.turnAt) { a.dir = [-a.dir[0], 0]; a.turnAt = null; }
+  a.x += a.dir[0];
 }
-const offEdge = (x, y) => (x < 0 || x >= COLS) && TUNNEL_ROWS.includes(y);
 
 function spawnFromEdge(rows) {
   const y = rows[Math.floor(Math.random() * rows.length)], left = Math.random() < 0.5;
@@ -161,6 +159,8 @@ function updateCritters(dt) {
   else {
     if ((game.spawnAnt -= dt) <= 0 && game.ants.length < 3 + game.level) {
       const a = spawnFromEdge([1, 4, 7, 10]);
+      const depth = 3 + Math.floor(Math.random() * 10);
+      a.turnAt = Math.random() < CROSS_CHANCE ? null : a.dir[0] > 0 ? depth : COLS - 1 - depth;
       if (!inTongue(a.x, a.y)) game.ants.push(a);     // never appear on top of the tongue
       game.spawnAnt = Math.max(0.8, 3 - 0.25 * game.level);
     }
