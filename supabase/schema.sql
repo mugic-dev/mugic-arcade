@@ -2,7 +2,7 @@
 -- Anyone may read and add scores; nobody (via the public key) may change or delete them.
 create table if not exists public.scores (
   id         bigint generated always as identity primary key,
-  game       text        not null check (game in ('invaders', 'sokoban')),
+  game       text        not null check (game ~ '^[a-z]{2,20}$'),      -- folder name of the game
   mode       text        not null default 'normal' check (mode in ('normal', 'hard')),
   level      int         check (level between 1 and 100),          -- Sokoban level; null for Invaders
   score      int         not null check (score between 0 and 10000000),

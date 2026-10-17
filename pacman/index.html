@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Muncher</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>MUGIC MUNCHER</h1>
+<div id="bar"></div>
+<canvas id="game" width="532" height="628"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC level and click Calibrate center. It steers like a joystick: roll right/left or
+  pitch up/down, and the further you tilt, the faster you go (level = stop). A turn you ask for early is taken at the
+  next opening. Flick or Enter to start. Keyboard: arrows.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const SPEED_DEADZONE = 2;              // degrees of tilt that still count as center
+let range = 15;
+try { range = +localStorage.getItem('mugicMuncherRange') || 15; } catch (e) {}
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows, Enter',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full speed at', `<input type="range" id="range" min="5" max="45" value="${range}">`, 'rangeVal']],
+});
+$('rangeVal').textContent = '±' + range + '°';
+$('range').oninput = e => {
+  range = +e.target.value; $('rangeVal').textContent = '±' + range + '°';
+  try { localStorage.setItem('mugicMuncherRange', range); } catch (e) {}
+};
+
+// ---------- Maze ----------
+// Left half including the center column, mirrored. # wall, . dot, o power pellet, ' ' path, _ void,
+// - ghost-house door, H house. Checked: no dead ends (ghosts never reverse), every dot reachable.
+const HALF = [
+  '##########',
+  '#........#',
+  '#o##.###.#',
+  '#.........',
+  '#.##.#.###',
+  '#....#...#',
+  '####.### #',
+  '___#.#    ',
+  '####.# ##-',
+  '    .  #HH',
+  '####.# ###',
+  '___#.#    ',
+  '####.#.###',
+  '#........#',
+  '#.##.###.#',
+  '#o.#......',
+  '##.#.#.###',
+  '#....#...#',
+  '#.######.#',
+  '#.........',
+  '##########',
+];
+const MAZE = HALF.map(h => h + [...h.slice(0, -1)].reverse().join(''));
+const W = MAZE[0].length, H = MAZE.length, T = 28, TOP = 40;
+const PAC_START = [9, 15], EXIT = [9, 7], HOUSE = [9, 9];
+const cell = (x, y) => (y < 0 || y >= H) ? '#' : MAZE[y][((x % W) + W) % W];
+const isPath = c => c === '.' || c === 'o' || c === ' ';
+
+const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
+const same = (a, b) => a && b && a[0] === b[0] && a[1] === b[1];
+const opposite = (a, b) => a && b && a[0] === -b[0] && a[1] === -b[1];
+
+// Move entity e along e.dir by `dist` tiles. Tile centers are integer coordinates; at each center
+// choose(e) picks the next direction (or null to stop there).
+function advance(e, dist, choose) {
+  for (let guard = 0; dist > 1e-6 && guard < 20; ++guard) {
+    if (Math.abs(e.x - Math.round(e.x)) < 1e-6 && Math.abs(e.y - Math.round(e.y)) < 1e-6) {
+      e.x = Math.round(e.x); e.y = Math.round(e.y);
+      e.dir = choose(e);
+      if (!e.dir) return;
+    }
+    const [dx, dy] = e.dir, p = dx ? e.x : e.y, s = dx || dy;
+    const next = s > 0 ? Math.floor(p + 1e-6) + 1 : Math.ceil(p - 1e-6) - 1;
+    const step = Math.min(dist, Math.abs(next - p));
+    if (dx) e.x += s * step; else e.y += s * step;
+    dist -= step;
+    if (e.x < -0.5) e.x += W;                       // side tunnel
+    if (e.x > W - 0.5) e.x -= W;
+  }
+}
+
+// ---------- Game state ----------
+const GHOSTS = [
+  { name: 'red',    color: '#ff3b3b', corner: [W - 2, -3], release: 0 },
+  { name: 'pink',   color: '#ffb8de', corner: [1, -3],     release: 1 },
+  { name: 'cyan',   color: '#3ff0ff', corner: [W - 1, H + 1], release: 5 },
+  { name: 'orange', color: '#ffb847', corner: [0, H + 1],  release: 10 },
+];
+const MODES = [7, 20, 7, 20, 5, 20, 5, Infinity];   // seconds: scatter, chase, scatter, ...
+const game = { state: 'title', score: 0, hi: 0, lives: 3, level: 1 };
+try { game.hi = +localStorage.getItem('mugicMuncherHi') || 0; } catch (e) {}
+const keys = { wanted: null };
+
+function newGame() { game.score = 0; game.lives = 3; game.level = 1; newLevel(); }
+
+function newLevel() {
+  game.dots = new Map();
+  MAZE.forEach((r, y) => [...r].forEach((c, x) => { if (c === '.' || c === 'o') game.dots.set(y * W + x, c); }));
+  game.dots.delete(PAC_START[1] * W + PAC_START[0]);
+  resetActors();
+}
+
+function resetActors() {
+  game.pac = { x: PAC_START[0], y: PAC_START[1], dir: null, face: DIRS.left, wanted: null, mouth: 0 };
+  game.ghosts = GHOSTS.map((g, i) => ({ ...g, x: i === 0 ? EXIT[0] : HOUSE[0] - 1 + (i - 1), y: i === 0 ? EXIT[1] : HOUSE[1],
+    dir: DIRS.left, state: i === 0 ? 'active' : 'house', timer: Math.max(0, g.release - (game.level - 1)) }));
+  game.fright = 0; game.combo = 0; game.modeIdx = 0; game.modeTime = MODES[0];
+  game.state = 'ready'; game.readyTime = 1.6;
+  keys.wanted = null;
+}
+
+const lvl = () => Math.min(game.level - 1, 6);
+const pacMax = () => 7.5 + 0.2 * lvl();
+const inTunnel = g => Math.round(g.y) === 9 && (g.x < 4 || g.x > W - 5);
+const ghostSpeed = g => g.state === 'eyes' ? 13 : g.frightened ? 3.6 : (6.6 + 0.3 * lvl()) * (inTunnel(g) ? 0.6 : 1);
+const chasing = () => game.modeIdx % 2 === 1;
+
+// Joystick from the MUGIC: the dominant of roll/pitch picks the direction, its size the speed.
+function stick() {
+  if (!Mugic.connected) return keys.wanted ? { dir: keys.wanted, speed: 1 } : null;
+  const r = Mugic.roll, p = Mugic.pitch, mag = Math.max(Math.abs(r), Math.abs(p));
+  if (mag < SPEED_DEADZONE) return { dir: null, speed: 0 };
+  const dir = Math.abs(r) >= Math.abs(p) ? (r > 0 ? DIRS.right : DIRS.left) : (p > 0 ? DIRS.up : DIRS.down);
+  return { dir, speed: Math.min(1, mag / range) };
+}
+
+function updatePac(dt) {
+  const pac = game.pac, s = stick();
+  if (s && s.dir) pac.wanted = s.dir;
+  const speed = s ? s.speed * pacMax() : 0;
+  if (opposite(pac.wanted, pac.dir)) pac.dir = pac.wanted;   // reversing is allowed mid-corridor
+  const before = [pac.x, pac.y];
+  advance(pac, speed * dt, e => {
+    const open = d => d && isPath(cell(e.x + d[0], e.y + d[1]));
+    if (open(e.wanted)) return e.wanted;
+    return open(e.dir) ? e.dir : null;
+  });
+  if (pac.dir) pac.face = pac.dir;
+  if (pac.x !== before[0] || pac.y !== before[1]) pac.mouth += dt * 14;
+
+  const k = Math.round(pac.y) * W + ((Math.round(pac.x) % W) + W) % W, dot = game.dots.get(k);
+  if (dot) {
+    game.dots.delete(k);
+    game.score += dot === 'o' ? 50 : 10;
+    if (dot === 'o') {
+      game.fright = Math.max(2, 7 - lvl()); game.combo = 0;
+      game.ghosts.forEach(g => { if (g.state === 'active') { g.frightened = true; g.dir = [-g.dir[0], -g.dir[1]]; } });
+    }
+    if (!game.dots.size) { game.state = 'clear'; game.readyTime = 2; }
+  }
+}
+
+function ghostTarget(g) {
+  const pac = game.pac, px = Math.round(pac.x), py = Math.round(pac.y), [fx, fy] = pac.face;
+  if (!chasing()) return g.corner;
+  if (g.name === 'red') return [px, py];
+  if (g.name === 'pink') return [px + 4 * fx, py + 4 * fy];
+  if (g.name === 'cyan') {
+    const red = game.ghosts[0];
+    return [2 * (px + 2 * fx) - Math.round(red.x), 2 * (py + 2 * fy) - Math.round(red.y)];
+  }
+  return (px - g.x) ** 2 + (py - g.y) ** 2 > 64 ? [px, py] : g.corner;
+}
+
+function updateGhost(g, dt) {
+  if (g.state === 'house') {                      // bob in place until released
+    g.y = HOUSE[1] + Math.sin(performance.now() / 150 + g.x) * 0.15;
+    if ((g.timer -= dt) <= 0) g.state = 'leaving';
+    return;
+  }
+  if (g.state === 'leaving' || g.state === 'entering') {
+    // straight moves inside the house: to the center column, then up through the door (or down into the house)
+    const to = g.state === 'leaving' ? (Math.abs(g.x - HOUSE[0]) > 0.01 ? [HOUSE[0], HOUSE[1]] : EXIT) : HOUSE;
+    const dx = to[0] - g.x, dy = to[1] - g.y, d = Math.hypot(dx, dy), step = 3.5 * dt;
+    if (d <= step) {
+      g.x = to[0]; g.y = to[1];
+      if (g.state === 'entering') { g.state = 'leaving'; g.frightened = false; }
+      else if (same(to, EXIT)) { g.state = 'active'; g.dir = DIRS.left; }
+    } else { g.x += dx / d * step; g.y += dy / d * step; }
+    return;
+  }
+  advance(g, ghostSpeed(g) * dt, e => {
+    const x = e.x, y = e.y;
+    if (e.state === 'eyes' && x === EXIT[0] && y === EXIT[1]) { e.state = 'entering'; return null; }
+    const options = Object.values(DIRS).filter(d => !opposite(d, e.dir) && isPath(cell(x + d[0], y + d[1])));
+    if (!options.length) return [-e.dir[0], -e.dir[1]];
+    if (e.frightened) return options[Math.floor(Math.random() * options.length)];
+    const [tx, ty] = e.state === 'eyes' ? EXIT : ghostTarget(e);
+    return options.reduce((best, d) => {
+      const dd = (x + d[0] - tx) ** 2 + (y + d[1] - ty) ** 2;
+      return dd < best.dd ? { d, dd } : best;
+    }, { d: options[0], dd: Infinity }).d;
+  });
+}
+
+function update(dt) {
+  if (game.state === 'ready' || game.state === 'dying' || game.state === 'clear') {
+    if ((game.readyTime -= dt) > 0) return;
+    if (game.state === 'ready') game.state = 'play';
+    else if (game.state === 'clear') { ++game.level; newLevel(); }
+    else if (--game.lives <= 0) endGame();
+    else resetActors();
+    return;
+  }
+  if (game.state !== 'play') return;
+
+  if (game.fright > 0) {
+    if ((game.fright -= dt) <= 0) game.ghosts.forEach(g => { g.frightened = false; });
+  } else if ((game.modeTime -= dt) <= 0) {           // scatter <-> chase; ghosts reverse on the switch
+    game.modeTime = MODES[++game.modeIdx];
+    game.ghosts.forEach(g => { if (g.state === 'active') g.dir = [-g.dir[0], -g.dir[1]]; });
+  }
+  updatePac(dt);
+  if (game.state !== 'play') return;
+  for (const g of game.ghosts) {
+    updateGhost(g, dt);
+    if (g.state !== 'active' || Math.hypot(g.x - game.pac.x, g.y - game.pac.y) > 0.6) continue;
+    if (g.frightened) {
+      g.state = 'eyes'; g.frightened = false;
+      game.score += 200 * 2 ** game.combo++;
+      game.popup = { x: g.x, y: g.y, text: String(200 * 2 ** (game.combo - 1)), t: 0.8 };
+    } else {
+      game.state = 'dying'; game.readyTime = 1.6; game.pac.mouth = 0;
+      return;
+    }
+  }
+  if (game.popup && (game.popup.t -= dt) <= 0) game.popup = null;
+}
+
+function endGame() {
+  game.state = 'over';
+  if (game.score > game.hi) { game.hi = game.score; try { localStorage.setItem('mugicMuncherHi', game.hi); } catch (e) {} }
+  if (game.score > 0) Scores.submit({ game: 'pacman', score: game.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('pacman').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => { if (!Scores.busy() && (game.state === 'title' || game.state === 'over')) newGame(); };
+addEventListener('keydown', e => {
+  if (Scores.busy()) return;
+  const d = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }[e.code];
+  if (d) { keys.wanted = DIRS[d]; e.preventDefault(); }
+  if (e.code === 'Enter' && (game.state === 'title' || game.state === 'over')) newGame();
+});
+
+// ---------- Drawing ----------
+const cv = $('game'), ctx = cv.getContext('2d');
+const px = x => x * T + T / 2, py = y => TOP + y * T + T / 2;
+
+function drawMaze() {
+  ctx.strokeStyle = '#3050ff'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let y = 0; y < H; ++y) {
+    for (let x = 0; x < W; ++x) {
+      if (cell(x, y) !== '#') continue;
+      // outline wall edges that face a path, inset a little like the arcade maze
+      const x0 = x * T, y0 = TOP + y * T, m = T * 0.3;
+      const faces = (dx, dy) => { const c = cell(x + dx, y + dy); return c !== '#' && c !== '_' && !(y + dy < 0 || y + dy >= H); };
+      if (faces(0, -1)) { ctx.moveTo(x0, y0 + m); ctx.lineTo(x0 + T, y0 + m); }
+      if (faces(0, 1)) { ctx.moveTo(x0, y0 + T - m); ctx.lineTo(x0 + T, y0 + T - m); }
+      if (faces(-1, 0) && x > 0) { ctx.moveTo(x0 + m, y0); ctx.lineTo(x0 + m, y0 + T); }
+      if (faces(1, 0) && x < W - 1) { ctx.moveTo(x0 + T - m, y0); ctx.lineTo(x0 + T - m, y0 + T); }
+    }
+  }
+  ctx.stroke();
+  ctx.strokeStyle = '#ffb8de'; ctx.beginPath();
+  ctx.moveTo(px(9) - T / 2, py(8)); ctx.lineTo(px(9) + T / 2, py(8)); ctx.stroke();
+}
+
+function drawPac() {
+  const p = game.pac, cx = px(p.x), cy = py(p.y), r = T * 0.45;
+  let open = Math.abs(Math.sin(p.mouth)) * 0.35 * Math.PI;
+  if (game.state === 'dying') open = Math.PI * Math.min(1, 1 - game.readyTime / 1.6);
+  const a = Math.atan2(p.face[1], p.face[0]);
+  ctx.fillStyle = '#ffe000';
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a + open, a + 2 * Math.PI - open); ctx.closePath(); ctx.fill();
+}
+
+function drawGhost(g) {
+  const cx = px(g.x), cy = py(g.y), r = T * 0.45;
+  if (g.state !== 'eyes') {
+    const flash = g.frightened && game.fright < 2 && Math.floor(game.fright * 4) % 2;
+    ctx.fillStyle = g.frightened ? (flash ? '#ffffff' : '#2121ff') : g.color;
+    ctx.beginPath();
+    ctx.arc(cx, cy - r * 0.15, r, Math.PI, 0);
+    const base = cy + r * 0.85, wave = Math.floor(performance.now() / 120) % 2;
+    ctx.lineTo(cx + r, base);
+    for (let i = 0; i < 4; ++i) {                 // wavy skirt, right to left
+      ctx.lineTo(cx + r - (i + 0.5) * r / 2, base - ((i + wave) % 2 ? r * 0.25 : 0));
+      ctx.lineTo(cx + r - (i + 1) * r / 2, base);
+    }
+    ctx.closePath(); ctx.fill();
+    if (g.frightened) {
+      ctx.fillStyle = flash ? '#ff3b3b' : '#ffd0a0';
+      ctx.fillRect(cx - r * 0.4, cy - r * 0.3, r * 0.2, r * 0.2); ctx.fillRect(cx + r * 0.2, cy - r * 0.3, r * 0.2, r * 0.2);
+      return;
+    }
+  }
+  const [dx, dy] = g.dir || [0, 0];
+  for (const ex of [-0.35, 0.35]) {
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx + ex * r, cy - r * 0.2, r * 0.28, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1d2bd6'; ctx.beginPath(); ctx.arc(cx + ex * r + dx * r * 0.12, cy - r * 0.2 + dy * r * 0.12, r * 0.14, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
+  ctx.textAlign = 'left'; ctx.fillText('SCORE ' + game.score, 10, 26);
+  ctx.textAlign = 'center'; ctx.fillText('HI ' + game.hi, cv.width / 2, 26);
+  ctx.textAlign = 'right'; ctx.fillText('LV ' + game.level + '  ' + '●'.repeat(Math.max(0, game.lives - 1)), cv.width - 10, 26);
+  drawMaze();
+  if (game.state === 'title') {
+    ctx.textAlign = 'center'; ctx.fillStyle = '#ffe000'; ctx.font = '30px ui-monospace, Menlo, monospace';
+    ctx.fillText('MUGIC MUNCHER', cv.width / 2, py(9) + 10);
+    ctx.fillStyle = '#fff'; ctx.font = '15px ui-monospace, Menlo, monospace';
+    ctx.fillText('FLICK OR PRESS ENTER', cv.width / 2, py(13) + 6);
+    return;
+  }
+  const blink = Math.floor(performance.now() / 250) % 2;
+  game.dots.forEach((c, k) => {
+    const x = k % W, y = Math.floor(k / W);
+    ctx.fillStyle = '#ffd7b0'; ctx.beginPath();
+    if (c === 'o') { if (blink) ctx.arc(px(x), py(y), T * 0.3, 0, Math.PI * 2); }
+    else ctx.arc(px(x), py(y), T * 0.09, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  if (game.state !== 'dying' || game.readyTime > 1.2) game.ghosts.forEach(drawGhost);
+  drawPac();
+  if (game.popup) { ctx.fillStyle = '#3ff0ff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.textAlign = 'center'; ctx.fillText(game.popup.text, px(game.popup.x), py(game.popup.y)); }
+  ctx.textAlign = 'center'; ctx.font = '18px ui-monospace, Menlo, monospace';
+  if (game.state === 'ready') { ctx.fillStyle = '#ffe000'; ctx.fillText('READY!', cv.width / 2, py(11) + 6); }
+  if (game.state === 'clear') { ctx.fillStyle = '#4dff88'; ctx.fillText('LEVEL CLEAR!', cv.width / 2, py(11) + 6); }
+  if (game.state === 'over') {
+    ctx.fillStyle = '#ff3b3b'; ctx.fillText('GAME OVER', cv.width / 2, py(11) + 6);
+    ctx.fillStyle = '#fff'; ctx.font = '14px ui-monospace, Menlo, monospace'; ctx.fillText('flick or Enter to play again', cv.width / 2, py(13) + 6);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

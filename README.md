@@ -5,6 +5,7 @@ Browser games played with a MUGIC as the controller over Web Bluetooth. `index.h
 | Game | Folder | Controls |
 |---|---|---|
 | Invaders | `invaders/` | **Roll** → cannon speed, like a proportional joystick (`Full speed at` = roll for max speed, default 15°); **flick** fires |
+| Muncher (Pac-Man style) | `pacman/` | **Roll** → left/right, **pitch** → up/down, like a proportional joystick: the dominant axis picks the direction, its tilt the speed (`Full speed at`, default 15°; level = stop); early turns are taken at the next opening |
 | 倉庫番 Sōkoban | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart are on-screen buttons (U/R). **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
 
 Every game also plays with the keyboard.
