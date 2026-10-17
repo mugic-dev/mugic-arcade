@@ -16,7 +16,7 @@
 <p class="help">Steer the tongue's tip through the anthill: roll right/left, pitch up/down, the further you tilt the faster it
   goes. Tilt a little toward a shaft or side tunnel while moving and the tip turns into it at the next opening.
   Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
-  over. Ants keep to their tunnel, mostly poking in from the edge and back out. Only the tip eats: an ant touching the
+  over. Ants keep to their tunnel and walk in from the edge and back out, some reaching far across. Only the tip eats: an ant touching the
   tongue anywhere else bites. Eat worms from behind, never head-on.
   The two queens sit in the bottom tunnel: eating one clears every insect for a while (only two per anthill); the spider comes out at night. Keyboard (any time, for testing — that game isn't posted to the global board): arrows, hold space = retract (let go to stop), Enter = start. With the MUGIC, a flick starts the retract and another flick stops it.</p>
 
@@ -154,9 +154,9 @@ function eatAt(x, y) {
   }
 }
 
-// Ants keep to their tunnel level: most walk in from their edge to a turning point and back out;
-// some cross the whole way. They leave when they step past the screen edge.
-const crossChance = () => Math.min(0.25, 0.05 + 0.03 * (game.level - 1));   // 5% on level 1, +3% per level
+// Ants keep to their tunnel level and never cross: each walks in from its edge to a turning point and back out
+// (only worms cross). Most turn in the near half; some reach deep, close to the far edge.
+const deepChance = () => Math.min(0.25, 0.05 + 0.03 * (game.level - 1));   // 5% on level 1, +3% per level
 function moveAnt(a) {
   if (a.turnAt != null && a.x === a.turnAt) { a.dir = [-a.dir[0], 0]; a.turnAt = null; }
   a.x += a.dir[0];
@@ -176,8 +176,8 @@ function updateCritters(dt) {
   else {
     if ((game.spawnAnt -= dt) <= 0 && game.ants.length < 5 + game.level) {
       const a = spawnFromEdge([1, 4, 7, 10]);
-      const depth = 3 + Math.floor(Math.random() * 10);
-      a.turnAt = Math.random() < crossChance() ? null : a.dir[0] > 0 ? depth : COLS - 1 - depth;
+      const depth = Math.random() < deepChance() ? 13 + Math.floor(Math.random() * (COLS - 14)) : 3 + Math.floor(Math.random() * 10);
+      a.turnAt = a.dir[0] > 0 ? depth : COLS - 1 - depth;
       if (!inTongue(a.x, a.y)) game.ants.push(a);     // never appear on top of the tongue
       game.spawnAnt = Math.max(0.5, 1.6 - 0.15 * game.level);
     }
