@@ -106,12 +106,17 @@ function stick() {
 function die() { game.state = 'bitten'; game.timer = 1.5; }
 
 // The tip moves one tile per step: back onto the previous segment retracts, into open tunnel extends.
-// A requested turn (alt) is taken as soon as that side is open; it never retracts.
+// A requested turn (alt) is taken as soon as that side is open; it never retracts. Asked one tile too
+// late (the opening is beside the tile just left), the tip steps back and takes it.
 function stepTongue(dir, alt) {
-  const [x, y] = tip(), prev = game.tongue[game.tongue.length - 2];
-  const canExtend = d => d && isOpen(x + d[0], y + d[1]) && !inTongue(x + d[0], y + d[1]);
+  let [x, y] = tip();
+  const prev = game.tongue[game.tongue.length - 2];
+  const canExtend = (d, px = x, py = y) => d && isOpen(px + d[0], py + d[1]) && !inTongue(px + d[0], py + d[1]);
   if (prev && prev[0] === x + dir[0] && prev[1] === y + dir[1]) { game.tongue.pop(); return; }
   if (canExtend(alt)) dir = alt;
+  else if (alt && prev && prev[0] + dir[0] === x && prev[1] + dir[1] === y && canExtend(alt, prev[0], prev[1])) {
+    game.tongue.pop(); [x, y] = prev; dir = alt;
+  }
   else if (!canExtend(dir)) return;
   const nx = x + dir[0], ny = y + dir[1];
   game.tongue.push([nx, ny]);
@@ -130,8 +135,9 @@ function updateTongue(dt) {
   }
   game.retracting = false;
   const s = stick();
-  if (!s) { game.stepAcc = 0; return; }
+  if (!s) { game.stepAcc = 0; game.request = null; return; }
   game.stepAcc += s.speed * EXTEND_SPEED * dt;
+  game.request = s.alt;
   while (game.stepAcc >= 1) { stepTongue(s.dir, s.alt); --game.stepAcc; }
 }
 
@@ -323,6 +329,11 @@ function drawTongue() {
   ctx.stroke();
   const [tx, ty] = tip();
   ctx.fillStyle = '#ff2f7a'; ctx.beginPath(); ctx.arc(cx(tx), cy(ty), 6, 0, Math.PI * 2); ctx.fill();
+  if (game.request) {                                 // the turn being asked for, taken at the next opening
+    const [dx, dy] = game.request, ax = cx(tx) + dx * 12, ay = cy(ty) + dy * 12;
+    ctx.fillStyle = '#ffffff'; ctx.beginPath();
+    ctx.moveTo(ax + dx * 6, ay + dy * 6); ctx.lineTo(ax - dy * 5, ay + dx * 5); ctx.lineTo(ax + dy * 5, ay - dx * 5); ctx.fill();
+  }
 }
 
 function draw() {
