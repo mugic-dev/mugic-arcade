@@ -1,0 +1,18 @@
+# Supabase pauses a free project after 7 days without activity; read one score a day to keep it awake.
+# Uses the public URL and publishable key from common/config.js (no secrets needed).
+name: Keep Supabase awake
+on:
+  schedule:
+    - cron: '17 6 * * *'      # daily, 06:17 UTC
+  workflow_dispatch:           # "Run workflow" button for testing
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read one score
+        run: |
+          URL=$(sed -n "s/.*SUPABASE_URL = '\([^']*\)'.*/\1/p" common/config.js)
+          KEY=$(sed -n "s/.*SUPABASE_ANON_KEY = '\([^']*\)'.*/\1/p" common/config.js)
+          curl -fsS "$URL/rest/v1/scores?select=created_at&limit=1" \
+            -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
