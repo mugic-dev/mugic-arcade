@@ -14,7 +14,8 @@
 <div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
 <div id="tuning"></div>
 <p class="help">Steer the tongue's tip through the anthill: roll right/left, pitch up/down, the further you tilt the faster it
-  goes. Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
+  goes. Tilt a little toward a shaft or side tunnel while moving and the tip turns into it at the next opening.
+  Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
   over. Ants keep to their tunnel, mostly poking in from the edge and back out. Only the tip eats: an ant touching the
   tongue anywhere else bites. Eat worms from behind, never head-on.
   The two queens sit in the bottom tunnel: eating one clears every insect for a while (only two per anthill); the spider comes out at night. Keyboard (any time, for testing — that game isn't posted to the global board): arrows, hold space = retract (let go to stop), Enter = start. With the MUGIC, a flick starts the retract and another flick stops it.</p>
@@ -87,7 +88,8 @@ const antSpeed = () => 2.2 + 0.25 * Math.min(game.level - 1, 8) + (night() ? 0.8
 
 // Held arrow keys override the MUGIC (and keep that game off the global board).
 // MUGIC: the dominant of roll/pitch picks the direction, with hysteresis so a diagonal tilt doesn't flicker.
-const SWITCH_RATIO = 1.4;
+// The other axis, when tilted at least TURN_MIN degrees, asks for a turn: taken at the next opening.
+const SWITCH_RATIO = 1.4, TURN_MIN = 5;
 let stickAxis = 'roll';
 function stick() {
   if (keys.dir) { game.keyboard = true; return { dir: keys.dir, speed: 1 }; }
@@ -96,18 +98,22 @@ function stick() {
   if (mag < DEADZONE) return null;
   const other = stickAxis === 'roll' ? 'pitch' : 'roll';
   if (Math.abs(Mugic[other]) > SWITCH_RATIO * Math.abs(Mugic[stickAxis])) stickAxis = other;
-  const v = Mugic[stickAxis];
-  const dir = stickAxis === 'roll' ? (v > 0 ? DIRS.right : DIRS.left) : (v > 0 ? DIRS.up : DIRS.down);
-  return { dir, speed: Math.min(1, Math.abs(v) / range) };
+  const toDir = (axis, v) => axis === 'roll' ? (v > 0 ? DIRS.right : DIRS.left) : (v > 0 ? DIRS.up : DIRS.down);
+  const v = Mugic[stickAxis], w = Mugic[other];
+  return { dir: toDir(stickAxis, v), alt: Math.abs(w) >= TURN_MIN ? toDir(other, w) : null, speed: Math.min(1, Math.abs(v) / range) };
 }
 
 function die() { game.state = 'bitten'; game.timer = 1.5; }
 
 // The tip moves one tile per step: back onto the previous segment retracts, into open tunnel extends.
-function stepTongue(dir) {
-  const [x, y] = tip(), nx = x + dir[0], ny = y + dir[1], prev = game.tongue[game.tongue.length - 2];
-  if (prev && prev[0] === nx && prev[1] === ny) { game.tongue.pop(); return; }
-  if (!isOpen(nx, ny) || inTongue(nx, ny)) return;
+// A requested turn (alt) is taken as soon as that side is open; it never retracts.
+function stepTongue(dir, alt) {
+  const [x, y] = tip(), prev = game.tongue[game.tongue.length - 2];
+  const canExtend = d => d && isOpen(x + d[0], y + d[1]) && !inTongue(x + d[0], y + d[1]);
+  if (prev && prev[0] === x + dir[0] && prev[1] === y + dir[1]) { game.tongue.pop(); return; }
+  if (canExtend(alt)) dir = alt;
+  else if (!canExtend(dir)) return;
+  const nx = x + dir[0], ny = y + dir[1];
   game.tongue.push([nx, ny]);
   if (game.larvae.delete(key(nx, ny))) game.score += 10;
   eatAt(nx, ny);
@@ -126,7 +132,7 @@ function updateTongue(dt) {
   const s = stick();
   if (!s) { game.stepAcc = 0; return; }
   game.stepAcc += s.speed * EXTEND_SPEED * dt;
-  while (game.stepAcc >= 1) { stepTongue(s.dir); --game.stepAcc; }
+  while (game.stepAcc >= 1) { stepTongue(s.dir, s.alt); --game.stepAcc; }
 }
 
 // Whatever the tip lands on: ants and the queen are eaten, worms only from behind.
