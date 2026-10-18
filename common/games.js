@@ -17,5 +17,9 @@ const GAMES = [
   { id: 'toss', name: 'Paper Fling', blurb: 'Throw for real: point to aim, tip up to lob, twist for spin, throw harder to go further.', board: 'LONGEST STREAK' },
   { id: 'chopper', name: 'Rescue Chopper', blurb: 'Choplifter-style: roll and pitch fly, hover to bomb, flick fires; land to rescue hostages.' },
   { id: 'flight', name: 'Sky Rings', blurb: 'Flight sim: hold the MUGIC like a plane — roll banks, nose up climbs, yaw is the rudder. Fly the ring course.' },
+  { id: 'defense', name: 'Sky Shield', blurb: 'Missile Command-style: point the MUGIC to aim the crosshair, flick to fire, save the cities.' },
+  { id: 'fruit', name: 'Fruit Slice', blurb: 'Point the MUGIC and swipe fast to slice the flying fruit. Combos, and never cut a bomb.' },
+  { id: 'maze', name: 'Marble Maze', blurb: 'Labyrinth-style: the MUGIC is the board, tilt it to roll the ball past the holes into the goal.' },
+  { id: 'bowling', name: 'Bowling', blurb: 'Point to aim, twist for hook, swing and flick to bowl. Ten frames, real scoring.' },
   { id: 'sokoban', name: 'Warehouse', short: 'WAREHOUSE HARD', blurb: 'Flick left/right/up/down to step and push crates, undo with a button.', board: 'LEVEL RECORDS', levels: 25 },
 ];

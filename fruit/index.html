@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Fruit Slice</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>FRUIT SLICE</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="480"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, point the MUGIC at the middle of the screen and click Calibrate center. Point it like a laser
+  pointer to move the blade; swipe fast to cut (the trail glows when it's sharp). Slice the fruit, several in one swipe
+  for a combo, and never cut a bomb. Three fruits dropped and it's over. Mouse also works (not ranked).</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const STORE = 'mugicFruit';
+const opts = { range: 25, axis: 'yaw' };
+try { Object.assign(opts, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(STORE, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'mouse',
+  axes: ['yaw', 'roll', 'pitch'],
+  extraRows: [
+    ['Left/right from', `<select id="axis"><option value="yaw">yaw (point)</option><option value="roll">roll (tilt)</option></select>`, 'axisVal'],
+    ['Screen edge at', `<input type="range" id="range" min="10" max="45">`, 'rangeVal'],
+  ],
+});
+$('axis').value = opts.axis; $('axis').onchange = e => { opts.axis = e.target.value; saveOpts(); };
+$('range').value = opts.range; $('rangeVal').textContent = '±' + opts.range + '°';
+$('range').oninput = e => { opts.range = +e.target.value; $('rangeVal').textContent = '±' + opts.range + '°'; saveOpts(); };
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, GRAV = 520;
+const SHARP = 900;   // blade speed (px/s) that cuts
+const FRUITS = [
+  { name: 'melon', r: 34, skin: '#2f8f3a', flesh: '#ff4d5e', rim: '#d7f5b0', seeds: '#222' },
+  { name: 'orange', r: 26, skin: '#ff9a1f', flesh: '#ffc04d', rim: '#fff2c8', seeds: null },
+  { name: 'apple', r: 25, skin: '#d82632', flesh: '#fff6d8', rim: '#fff', seeds: '#6b3b14' },
+  { name: 'lime', r: 22, skin: '#5cc22a', flesh: '#c8f06a', rim: '#f2ffd0', seeds: null },
+  { name: 'plum', r: 22, skin: '#7a2a8c', flesh: '#ffd04d', rim: '#ffe9a8', seeds: null },
+  { name: 'coconut', r: 28, skin: '#6b4423', flesh: '#fbfbf2', rim: '#fff', seeds: null },
+];
+const game = { state: 'title', hi: 0, keyboard: false };
+try { game.hi = +localStorage.getItem('mugicFruitHi') || 0; } catch (e) {}
+const blade = { x: W / 2, y: H / 2, trail: [], speed: 0 };
+let mouse = null;
+cv.addEventListener('mousemove', e => { const r = cv.getBoundingClientRect(); mouse = { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height, t: performance.now() }; });
+cv.addEventListener('mouseleave', () => { mouse = null; });
+
+function newGame() {
+  Object.assign(game, { state: 'play', score: 0, misses: 0, t: 0, throwT: 1, items: [], halves: [], splats: [], pops: [], keyboard: false, swipe: { n: 0, t: 0 } });
+}
+// a volley from below: more fruit and more bombs as the game goes on
+function volley() {
+  const g = game, lvl = Math.min(1, g.t / 150), n = 1 + Math.floor(Math.random() * (1 + lvl * 4));
+  for (let k = 0; k < n; ++k) {
+    const bomb = g.t > 8 && Math.random() < 0.08 + 0.14 * lvl;
+    const f = FRUITS[Math.floor(Math.random() * FRUITS.length)];
+    const x = 80 + Math.random() * (W - 160), peak = 60 + Math.random() * 150;
+    const vy = -Math.sqrt(2 * GRAV * (H + 40 - peak)), tUp = -vy / GRAV;
+    const vx = ((W / 2 + (Math.random() - 0.5) * 260) - x) / (tUp * 2);
+    g.items.push({ x, y: H + 40, vx, vy, r: bomb ? 22 : f.r, f, bomb, a: Math.random() * 6, va: (Math.random() - 0.5) * 6, delay: k * 0.18 });
+  }
+  g.throwT = Math.max(0.9, 2.6 - 1.5 * lvl) * (0.8 + Math.random() * 0.4);
+}
+
+function moveBlade(dt) {
+  let tx = blade.x, ty = blade.y;
+  if (Mugic.connected) {
+    const h = opts.axis === 'roll' ? Mugic.roll : Mugic.yaw;
+    tx = W / 2 + Math.max(-1.1, Math.min(1.1, h / opts.range)) * W / 2;
+    ty = H / 2 - Math.max(-1.1, Math.min(1.1, Mugic.pitch / opts.range)) * H / 2;
+  }
+  if (mouse && performance.now() - mouse.t < 400) { tx = mouse.x; ty = mouse.y; if (game.state === 'play') game.keyboard = true; }
+  const px = blade.x, py = blade.y;
+  blade.x = Math.max(-20, Math.min(W + 20, tx)); blade.y = Math.max(-20, Math.min(H + 20, ty));
+  blade.speed = blade.speed * 0.5 + 0.5 * Math.hypot(blade.x - px, blade.y - py) / Math.max(dt, 1e-3);
+  const now = performance.now();
+  blade.trail.push({ x: blade.x, y: blade.y, t: now, sharp: blade.speed > SHARP });
+  blade.trail = blade.trail.filter(p => now - p.t < 140);
+  return { px, py };
+}
+const segDist = (x, y, ax, ay, bx, by) => {
+  const dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy, t = l ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l)) : 0;
+  return Math.hypot(x - ax - t * dx, y - ay - t * dy);
+};
+
+function update(dt, prev) {
+  const g = game;
+  g.t += dt; g.throwT -= dt;
+  if (g.throwT <= 0) volley();
+  const sharp = blade.speed > SHARP;
+  if (!sharp) { if (g.swipe.n >= 3) combo(g.swipe.n); g.swipe.n = 0; }
+  for (const it of g.items) {
+    if (it.delay > 0) { it.delay -= dt; continue; }
+    it.vy += GRAV * dt; it.x += it.vx * dt; it.y += it.vy * dt; it.a += it.va * dt;
+    if (sharp && !it.cut && it.y < H + it.r && segDist(it.x, it.y, prev.px, prev.py, blade.x, blade.y) < it.r) {
+      it.cut = true;
+      if (it.bomb) { boom(it); return; }
+      slice(it, Math.atan2(blade.y - prev.py, blade.x - prev.px));
+    }
+    if (!it.cut && it.vy > 0 && it.y > H + it.r + 10) {
+      it.gone = true;
+      if (!it.bomb) { ++g.misses; g.pops.push({ x: it.x, y: H - 30, text: '✗', color: '#ff4d4d', t: 1 }); if (g.misses >= 3) return over(); }
+    }
+  }
+  g.items = g.items.filter(it => !it.cut && !it.gone);
+  for (const h of g.halves) { h.vy += GRAV * dt; h.x += h.vx * dt; h.y += h.vy * dt; h.a += h.va * dt; }
+  g.halves = g.halves.filter(h => h.y < H + 60);
+  for (const s of g.splats) s.t -= dt * 0.35;
+  g.splats = g.splats.filter(s => s.t > 0);
+  for (const p of g.pops) { p.t -= dt; p.y -= 30 * dt; }
+  g.pops = g.pops.filter(p => p.t > 0);
+}
+function slice(it, ang) {
+  const g = game;
+  g.score += 1; ++g.swipe.n;
+  const nx = Math.cos(ang + Math.PI / 2), ny = Math.sin(ang + Math.PI / 2);
+  for (const s of [-1, 1]) g.halves.push({ x: it.x, y: it.y, vx: it.vx * 0.6 + s * nx * 90, vy: Math.min(it.vy, 0) * 0.4 + s * ny * 90, a: ang, va: s * 4, side: s, f: it.f, r: it.r });
+  g.splats.push({ x: it.x, y: it.y, r: it.r * 1.6, color: it.f.flesh, t: 1, seed: Math.random() });
+}
+function combo(n) {
+  game.score += n;
+  game.pops.push({ x: blade.x, y: blade.y, text: `${n} FRUIT COMBO +${n}`, color: '#ffd23f', t: 1.4 });
+}
+function boom(it) { game.boom = { x: it.x, y: it.y, t: 0 }; over(); }
+
+const ranked = () => !game.keyboard;
+function over() {
+  const g = game;
+  if (g.swipe.n >= 3) combo(g.swipe.n);
+  g.state = 'over';
+  if (g.score > g.hi) { g.hi = g.score; try { localStorage.setItem('mugicFruitHi', g.hi); } catch (e) {} }
+  if (g.score > 0 && ranked()) Scores.submit({ game: 'fruit', score: g.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('fruit').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+// start: a flick, space, or a click
+const start = () => { if (!Scores.busy() && game.state !== 'play') newGame(); };
+Mugic.onFlick = start;
+cv.addEventListener('click', start);
+addEventListener('keydown', e => { if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); start(); } });
+
+// ---------- drawing ----------
+function text(s, x, y, align = 'center', size = 16, color = '#fff') { ctx.fillStyle = color; ctx.font = `bold ${size}px ui-monospace, Menlo, monospace`; ctx.textAlign = align; ctx.fillText(s, x, y); }
+function drawFruit(f, x, y, r, a) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+  ctx.fillStyle = f.skin; ctx.beginPath(); ctx.arc(0, 0, r, 0, 2 * Math.PI); ctx.fill();
+  if (f.name === 'melon') { ctx.strokeStyle = '#1d5e25'; ctx.lineWidth = 4; for (const k of [-0.5, 0, 0.5]) { ctx.beginPath(); ctx.ellipse(k * r, 0, r * 0.18, r * 0.95, 0, 0, 2 * Math.PI); ctx.stroke(); } }
+  if (f.name === 'coconut') { ctx.fillStyle = '#3d2412'; for (const [dx, dy] of [[-6, -8], [6, -8], [0, 2]]) { ctx.beginPath(); ctx.arc(dx, dy, 3, 0, 2 * Math.PI); ctx.fill(); } }
+  if (f.name === 'apple' || f.name === 'plum') { ctx.strokeStyle = '#5a3a1a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(0, -r + 2); ctx.lineTo(3, -r - 8); ctx.stroke();
+    ctx.fillStyle = '#3fae3a'; ctx.beginPath(); ctx.ellipse(9, -r - 4, 8, 4, -0.4, 0, 2 * Math.PI); ctx.fill(); }
+  ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.beginPath(); ctx.ellipse(-r * 0.35, -r * 0.4, r * 0.28, r * 0.16, -0.6, 0, 2 * Math.PI); ctx.fill();
+  ctx.restore();
+}
+function drawHalf(h) {
+  ctx.save(); ctx.translate(h.x, h.y); ctx.rotate(h.a);
+  ctx.beginPath(); ctx.arc(0, 0, h.r, h.side > 0 ? 0 : Math.PI, h.side > 0 ? Math.PI : 2 * Math.PI); ctx.closePath();
+  ctx.fillStyle = h.f.skin; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, h.r * 0.86, h.side > 0 ? 0 : Math.PI, h.side > 0 ? Math.PI : 2 * Math.PI); ctx.closePath();
+  ctx.fillStyle = h.f.rim; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, 0, h.r * 0.78, h.side > 0 ? 0 : Math.PI, h.side > 0 ? Math.PI : 2 * Math.PI); ctx.closePath();
+  ctx.fillStyle = h.f.flesh; ctx.fill();
+  if (h.f.seeds) { ctx.fillStyle = h.f.seeds; for (let k = -2; k <= 2; ++k) ctx.fillRect(k * h.r * 0.25 - 1.5, h.side * h.r * 0.35 - 2, 3, 5); }
+  ctx.restore();
+}
+function drawBomb(it) {
+  ctx.save(); ctx.translate(it.x, it.y);
+  ctx.fillStyle = '#1b1b22'; ctx.beginPath(); ctx.arc(0, 0, it.r, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0, 0, it.r - 4, 0, 2 * Math.PI); ctx.stroke();
+  ctx.fillStyle = '#555'; ctx.fillRect(-5, -it.r - 6, 10, 7);
+  ctx.strokeStyle = '#c9a36b'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -it.r - 6); ctx.quadraticCurveTo(8, -it.r - 16, 3, -it.r - 22); ctx.stroke();
+  const fl = performance.now() / 50; ctx.fillStyle = ['#fff', '#ffd23f', '#ff6b2b'][Math.floor(fl) % 3];
+  ctx.beginPath(); ctx.arc(3, -it.r - 22, 4 + Math.sin(fl) * 1.5, 0, 2 * Math.PI); ctx.fill();
+  text('✸', 0, 6, 'center', 16, '#ff3b3b');
+  ctx.restore();
+}
+function draw() {
+  const g = game;
+  // wooden board
+  ctx.fillStyle = '#6b4a2b'; ctx.fillRect(0, 0, W, H);
+  for (let x = 0; x < W; x += 80) { ctx.fillStyle = x % 160 ? '#74512f' : '#664527'; ctx.fillRect(x, 0, 78, H); ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(x + 78, 0, 2, H); }
+  ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 1;
+  for (let k = 0; k < 40; ++k) { const x = (k * 97) % W, y = (k * 53) % H; ctx.beginPath(); ctx.moveTo(x, y); ctx.bezierCurveTo(x + 10, y + 40, x - 10, y + 80, x + 4, y + 120); ctx.stroke(); }
+  if (g.splats) for (const s of g.splats) {
+    ctx.globalAlpha = Math.max(0, s.t) * 0.7; ctx.fillStyle = s.color;
+    for (let k = 0; k < 7; ++k) { const a = k * 0.9 + s.seed * 6, d = s.r * (0.3 + ((k * 37 + s.seed * 100) % 10) / 14); ctx.beginPath(); ctx.arc(s.x + Math.cos(a) * d, s.y + Math.sin(a) * d, s.r * 0.22, 0, 2 * Math.PI); ctx.fill(); }
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 0.45, 0, 2 * Math.PI); ctx.fill(); ctx.globalAlpha = 1;
+  }
+  if (g.state === 'title') {
+    text('FRUIT SLICE', W / 2, 150, 'center', 46, '#ffd23f');
+    text('point the MUGIC, swipe fast to cut', W / 2, 200, 'center', 17);
+    text('slice fruit · combos · never a bomb', W / 2, 228, 'center', 17);
+    text('flick, space or click to start', W / 2, 300, 'center', 18, '#4dff88');
+    text('HI ' + g.hi, W / 2, 340, 'center', 15, '#ffd23f');
+    drawFruit(FRUITS[0], 140, 380, 34, performance.now() / 900); drawFruit(FRUITS[1], 500, 390, 26, -performance.now() / 700);
+  } else {
+    for (const h of g.halves) drawHalf(h);
+    for (const it of g.items) if (it.delay <= 0) it.bomb ? drawBomb(it) : drawFruit(it.f, it.x, it.y, it.r, it.a);
+    for (const p of g.pops) { ctx.globalAlpha = Math.min(1, p.t * 2); text(p.text, p.x, p.y, 'center', p.text === '✗' ? 30 : 18, p.color); ctx.globalAlpha = 1; }
+    text(`${g.score}`, 14, 40, 'left', 34, '#ffd23f');
+    text(`BEST ${g.hi}`, 14, 62, 'left', 13, '#fff');
+    for (let k = 0; k < 3; ++k) text('✗', W - 20 - k * 30, 40, 'center', 28, k < g.misses ? '#ff3b3b' : 'rgba(255,255,255,0.3)');
+    if (g.keyboard) text('MOUSE · NOT RANKED', W / 2, 24, 'center', 11, '#ffb0b0');
+  }
+  // blade trail: a tapering streak, white-hot when it's fast enough to cut
+  const tr = blade.trail;
+  for (let i = 1; i < tr.length; ++i) {
+    const f = i / tr.length;
+    ctx.strokeStyle = tr[i].sharp ? `rgba(255,255,255,${f})` : `rgba(160,200,255,${f * 0.5})`;
+    ctx.lineWidth = (tr[i].sharp ? 9 : 4) * f; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(tr[i - 1].x, tr[i - 1].y); ctx.lineTo(tr[i].x, tr[i].y); ctx.stroke();
+  }
+  ctx.fillStyle = blade.speed > SHARP ? '#fff' : '#9cc8ff'; ctx.beginPath(); ctx.arc(blade.x, blade.y, 4, 0, 2 * Math.PI); ctx.fill();
+  if (g.state === 'over') {
+    if (g.boom && g.boom.t < 0.6) { g.boom.t += 1 / 60; ctx.fillStyle = `rgba(255,255,255,${1 - g.boom.t / 0.6})`; ctx.fillRect(0, 0, W, H); }
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+    text(g.boom ? 'BOOM!' : 'GAME OVER', W / 2, 190, 'center', 44, '#ff4d4d');
+    text(`SCORE ${g.score}`, W / 2, 240, 'center', 24);
+    text('flick, space or click to play again', W / 2, 290, 'center', 16, '#4dff88');
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  const prev = moveBlade(dt);
+  if (game.state === 'play' && !Scores.busy()) update(dt, prev);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

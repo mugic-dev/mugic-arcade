@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Marble Maze</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>MARBLE MAZE</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="480"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC flat and click Calibrate center. The MUGIC is the board: tilt it and the steel
+  ball rolls downhill (roll tilts left/right, tip forward rolls it up the screen). Steer around the holes to the green
+  hole to drop to the next level. A wrong hole costs a ball and restarts the level; 3 balls. Levels pay 500 × level plus
+  a time bonus. Keyboard (not ranked): arrows tilt.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const STORE = 'mugicMaze';
+const opts = { range: 20 };
+try { Object.assign(opts, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(STORE, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows tilt',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full tilt at', `<input type="range" id="range" min="5" max="40">`, 'rangeVal']],
+});
+$('range').value = opts.range; $('rangeVal').textContent = '±' + opts.range + '°';
+$('range').oninput = e => { opts.range = +e.target.value; $('rangeVal').textContent = '±' + opts.range + '°'; saveOpts(); };
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, TOP = 32, BW = W - 16, BH = H - TOP - 8;   // board area
+const TILT_G = 1100, DAMP = 0.6, BOUNCE = 0.35, VMAX = 750, BALL = 9;
+const SIZES = [[6, 4], [7, 5], [8, 5], [9, 6], [10, 6], [10, 7], [11, 7], [12, 8]];
+
+// ---------- levels: a perfect maze (fixed seed per level), holes in dead ends and beside the straight runs ----------
+function makeLevel(n) {
+  let seed = 7919 * (n + 1); const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const [cols, rows] = SIZES[n], s = Math.floor(Math.min(BW / cols, BH / rows)), t = Math.max(6, Math.round(s * 0.13));
+  const ox = 8 + Math.floor((BW - cols * s) / 2), oy = TOP + Math.floor((BH - rows * s) / 2);
+  // open[c][dir]: passage from cell c (0 right, 1 down, 2 left, 3 up)
+  const open = Array.from({ length: cols * rows }, () => [false, false, false, false]);
+  const D = [[1, 0], [0, 1], [-1, 0], [0, -1]], seen = new Set([0]), stack = [0];
+  while (stack.length) {
+    const c = stack[stack.length - 1], x = c % cols, y = Math.floor(c / cols);
+    const nb = [0, 1, 2, 3].filter(d => { const nx = x + D[d][0], ny = y + D[d][1]; return nx >= 0 && ny >= 0 && nx < cols && ny < rows && !seen.has(ny * cols + nx); });
+    if (!nb.length) { stack.pop(); continue; }
+    const d = nb[Math.floor(rnd() * nb.length)], m = (y + D[d][1]) * cols + x + D[d][0];
+    open[c][d] = true; open[m][(d + 2) % 4] = true; seen.add(m); stack.push(m);
+  }
+  // walls as rectangles: the frame, plus each closed right/bottom side
+  const walls = [[ox - t / 2, oy - t / 2, cols * s + t, t], [ox - t / 2, oy + rows * s - t / 2, cols * s + t, t],
+                 [ox - t / 2, oy - t / 2, t, rows * s + t], [ox + cols * s - t / 2, oy - t / 2, t, rows * s + t]];
+  for (let y = 0; y < rows; ++y) for (let x = 0; x < cols; ++x) {
+    const c = y * cols + x;
+    if (x < cols - 1 && !open[c][0]) walls.push([ox + (x + 1) * s - t / 2, oy + y * s - t / 2, t, s + t]);
+    if (y < rows - 1 && !open[c][1]) walls.push([ox + x * s - t / 2, oy + (y + 1) * s - t / 2, s + t, t]);
+  }
+  // the solution path, start -> goal (opposite corner)
+  const goalC = cols * rows - 1, prev = new Map([[0, -1]]), q = [0];
+  while (q.length) { const c = q.shift(); for (let d = 0; d < 4; ++d) if (open[c][d]) { const m = c + D[d][0] + D[d][1] * cols; if (!prev.has(m)) { prev.set(m, c); q.push(m); } } }
+  const route = []; for (let c = goalC; c >= 0; c = prev.get(c)) route.unshift(c);
+  const path = new Set(route);
+  const center = c => [ox + (c % cols + 0.5) * s, oy + (Math.floor(c / cols) + 0.5) * s];
+  const hr = Math.max(11, Math.round(s * 0.21)), holes = [];
+  const deg = c => open[c].filter(Boolean).length;
+  const inner = s - t, off = inner / 2 - hr + 2;   // a side hole touches the wall, leaving the rest of the corridor free
+  for (let c = 1; c < goalC; ++c) {
+    const [cx, cy] = center(c);
+    if (deg(c) === 1 && !path.has(c) && n >= 1 && rnd() < 0.5 + n * 0.06) holes.push([cx, cy, hr]);       // dead-end trap
+    else if (path.has(c) && deg(c) === 2 && c > 1 && rnd() < 0.12 + n * 0.05) {
+      const horiz = open[c][0] && open[c][2], vert = open[c][1] && open[c][3], side = rnd() < 0.5 ? -1 : 1;
+      if (horiz) holes.push([cx, cy + side * off, hr]);
+      else if (vert) holes.push([cx + side * off, cy, hr]);   // (no holes in bends: momentum would carry the ball in)
+    }
+  }
+  return { cols, rows, s, t, walls, holes, route: route.map(center), start: center(0), goal: [...center(goalC), hr + 3], par: Math.round(10 + cols * rows * 0.55) };
+}
+const LEVELS = SIZES.map((_, i) => makeLevel(i));
+
+const game = { state: 'title', hi: 0, keyboard: false };
+try { game.hi = +localStorage.getItem('mugicMazeHi') || 0; } catch (e) {}
+const keys = {};
+const tilt = { x: 0, y: 0 };
+
+function newGame() { Object.assign(game, { state: 'play', score: 0, balls: 3, level: 0, keyboard: false }); startLevel(); }
+function startLevel() {
+  const L = LEVELS[game.level];
+  Object.assign(game, { L, t: 0, ball: { x: L.start[0], y: L.start[1], vx: 0, vy: 0 }, fall: null, msg: `LEVEL ${game.level + 1}`, msgT: 1.5 });
+}
+
+function readTilt(dt) {
+  let tx = 0, ty = 0;
+  if (Mugic.connected) {
+    tx = Math.max(-1, Math.min(1, Mugic.roll / opts.range));
+    ty = Math.max(-1, Math.min(1, Mugic.pitch / opts.range));   // tip forward (pitch < 0): the far edge drops, the ball rolls up
+  }
+  if (keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown) {
+    tx = (keys.ArrowRight ? 0.6 : 0) - (keys.ArrowLeft ? 0.6 : 0); ty = (keys.ArrowUp ? -0.6 : 0) + (keys.ArrowDown ? 0.6 : 0);
+    if (game.state === 'play') game.keyboard = true;
+  }
+  const k = 1 - Math.exp(-dt / 0.08);
+  tilt.x += (tx - tilt.x) * k; tilt.y += (ty - tilt.y) * k;
+}
+
+function update(dt) {
+  const g = game, L = g.L, b = g.ball;
+  g.t += dt; g.msgT -= dt;
+  if (g.fall) {
+    // sink into the hole, then next level (goal) or retry
+    g.fall.t += dt; b.x += (g.fall.x - b.x) * 0.3; b.y += (g.fall.y - b.y) * 0.3;
+    if (g.fall.t > 0.7) {
+      if (g.fall.goal) {
+        const bonus = Math.max(0, Math.round((L.par - g.t) * 10));
+        g.score += 500 * (g.level + 1) + bonus;
+        if (++g.level === LEVELS.length) return over(true);
+        startLevel(); g.msg = `+${500 * g.level} · time bonus ${bonus}`; g.msgT = 2.5;
+      } else if (--g.balls <= 0) return over(false);
+      else { startLevel(); g.msg = 'OOPS! TRY AGAIN'; g.msgT = 1.5; }
+    }
+    return;
+  }
+  const N = 4, h = dt / N;
+  for (let i = 0; i < N; ++i) {
+    b.vx += (tilt.x * TILT_G - DAMP * b.vx) * h; b.vy += (tilt.y * TILT_G - DAMP * b.vy) * h;
+    const sp = Math.hypot(b.vx, b.vy); if (sp > VMAX) { b.vx *= VMAX / sp; b.vy *= VMAX / sp; }
+    b.x += b.vx * h; b.y += b.vy * h;
+    for (const [x, y, w, hh] of L.walls) {
+      const cx = Math.max(x, Math.min(x + w, b.x)), cy = Math.max(y, Math.min(y + hh, b.y));
+      const dx = b.x - cx, dy = b.y - cy, d = Math.hypot(dx, dy);
+      if (d < BALL && d > 1e-6) {
+        const nx = dx / d, ny = dy / d, vn = b.vx * nx + b.vy * ny;
+        b.x += nx * (BALL - d); b.y += ny * (BALL - d);
+        if (vn < 0) { b.vx -= (1 + BOUNCE) * vn * nx; b.vy -= (1 + BOUNCE) * vn * ny; }
+      }
+    }
+  }
+  const [gx, gy, gr] = L.goal;
+  if (Math.hypot(b.x - gx, b.y - gy) < gr - 2) { g.fall = { x: gx, y: gy, t: 0, goal: true }; return; }
+  for (const [hx, hy, hr] of L.holes) if (Math.hypot(b.x - hx, b.y - hy) < hr * 0.75)   // falls once its center is well over the hole
+    { g.fall = { x: hx, y: hy, t: 0, goal: false }; return; }
+}
+
+const ranked = () => !game.keyboard;
+function over(won) {
+  const g = game;
+  g.state = 'over'; g.won = won;
+  if (won) g.score += g.balls * 500;
+  if (g.score > g.hi) { g.hi = g.score; try { localStorage.setItem('mugicMazeHi', g.hi); } catch (e) {} }
+  if (g.score > 0 && ranked()) Scores.submit({ game: 'maze', score: g.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('maze').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => { if (!Scores.busy() && game.state !== 'play') newGame(); };
+addEventListener('keydown', e => {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if ((e.code === 'Space' || e.code === 'Enter') && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- drawing: a wooden board; walls cast shadows away from the light, shifted by the tilt ----------
+function text(s, x, y, align = 'center', size = 16, color = '#fff') { ctx.fillStyle = color; ctx.font = `bold ${size}px ui-monospace, Menlo, monospace`; ctx.textAlign = align; ctx.fillText(s, x, y); }
+const grain = Array.from({ length: 60 }, (_, k) => [(k * 131) % W, (k * 71) % H, 40 + (k * 17) % 90]);
+function drawHole(x, y, r, goal) {
+  const gr = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.1, x, y, r);
+  gr.addColorStop(0, '#000'); gr.addColorStop(0.75, '#140c05'); gr.addColorStop(1, goal ? '#2bd65a' : '#3a2412');
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(x, y, r, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = goal ? '#4dff88' : 'rgba(0,0,0,0.5)'; ctx.lineWidth = goal ? 3 : 1.5; ctx.stroke();
+}
+function draw() {
+  const g = game, L = g.L || LEVELS[0];
+  ctx.fillStyle = '#2a1a0c'; ctx.fillRect(0, 0, W, H);
+  // board surface, lit a little brighter on the side tilted up
+  const lg = ctx.createLinearGradient(8 + tilt.x * 200, TOP + tilt.y * 150, W - 8 - tilt.x * 200, H - tilt.y * 150);
+  lg.addColorStop(0, '#d9b27a'); lg.addColorStop(1, '#c49a5f');
+  ctx.fillStyle = lg; ctx.fillRect(8, TOP, BW, BH);
+  ctx.strokeStyle = 'rgba(110,70,30,0.18)'; ctx.lineWidth = 1.2;
+  for (const [x, y, l] of grain) { ctx.beginPath(); ctx.moveTo(x, Math.max(TOP, y)); ctx.bezierCurveTo(x + 30, y + 4, x + l - 30, y - 4, x + l, y + 2); ctx.stroke(); }
+  for (const [x, y, r] of L.holes) drawHole(x, y, r, false);
+  drawHole(L.goal[0], L.goal[1], L.goal[2], true);
+  text('GOAL', L.goal[0], L.goal[1] - L.goal[2] - 4, 'center', 10, '#1b6b33');
+  // walls: shadow, side, top
+  const sx = 4 - tilt.x * 3, sy = 5 - tilt.y * 3;
+  ctx.fillStyle = 'rgba(40,20,5,0.35)';
+  for (const [x, y, w, h] of L.walls) ctx.fillRect(x + sx, y + sy, w, h);
+  ctx.fillStyle = '#7a4a22';
+  for (const [x, y, w, h] of L.walls) ctx.fillRect(x, y + 2, w, h);
+  ctx.fillStyle = '#a5683a';
+  for (const [x, y, w, h] of L.walls) ctx.fillRect(x, y, w, h - 1);
+  // the ball, with its shadow
+  if (g.ball) {
+    const b = g.ball, k = g.fall ? Math.max(0.15, 1 - g.fall.t / 0.7) : 1, r = BALL * k;
+    if (!g.fall) { ctx.fillStyle = 'rgba(30,15,0,0.35)'; ctx.beginPath(); ctx.ellipse(b.x + 3, b.y + 4, r, r * 0.85, 0, 0, 2 * Math.PI); ctx.fill(); }
+    const bg = ctx.createRadialGradient(b.x - r * 0.4, b.y - r * 0.4, r * 0.1, b.x, b.y, r);
+    bg.addColorStop(0, '#ffffff'); bg.addColorStop(0.35, '#c9d1dc'); bg.addColorStop(1, '#4b5563');
+    ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 2 * Math.PI); ctx.fill();
+  }
+  // header
+  ctx.fillStyle = '#2a1a0c'; ctx.fillRect(0, 0, W, TOP);
+  if (g.state === 'title') {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+    text('MARBLE MAZE', W / 2, 160, 'center', 44, '#ffd23f');
+    text('tilt the MUGIC, the ball rolls downhill', W / 2, 210, 'center', 16);
+    text('dodge the holes, drop into the green one', W / 2, 236, 'center', 16);
+    text('flick or space to start', W / 2, 300, 'center', 18, '#4dff88');
+    text('HI ' + g.hi, W / 2, 340, 'center', 15, '#ffd23f');
+    return;
+  }
+  text(`SCORE ${g.score}`, 10, 22, 'left', 15); text(`LEVEL ${g.level + 1}/${LEVELS.length}`, W / 2, 22, 'center', 15);
+  text(`TIME ${Math.max(0, L.par - g.t).toFixed(0)}`, W / 2 + 120, 22, 'left', 13, g.t < L.par ? '#ffd23f' : '#888');
+  for (let k = 0; k < 3; ++k) { ctx.fillStyle = k < g.balls ? '#c9d1dc' : '#4a3a2a'; ctx.beginPath(); ctx.arc(W - 20 - k * 22, 16, 7, 0, 2 * Math.PI); ctx.fill(); }
+  if (g.keyboard) text('KEYBOARD · NOT RANKED', 10, H - 12, 'left', 11, '#ffb0b0');
+  if (g.msgT > 0 && g.state === 'play') { ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(W / 2 - 200, H / 2 - 26, 400, 40); text(g.msg, W / 2, H / 2, 'center', 20, '#ffd23f'); }
+  if (g.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+    text(g.won ? 'ALL LEVELS CLEARED!' : 'NO BALLS LEFT', W / 2, 180, 'center', 34, g.won ? '#4dff88' : '#ff5a5a');
+    if (g.won) text(`balls left ${g.balls} × 500`, W / 2, 215, 'center', 15);
+    text(`SCORE ${g.score}`, W / 2, 250, 'center', 24);
+    text('flick or space to play again', W / 2, 300, 'center', 16, '#4dff88');
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  readTilt(dt);
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

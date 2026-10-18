@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Bowling</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>BOWLING</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="480"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, point the MUGIC down the lane and click Calibrate center. Point left/right (yaw) to aim, twist it
+  (roll) to set the hook — both shown on the lane — then swing and flick to release: the harder the swing, the faster
+  the ball. Ten frames, real scoring: strikes and spares count the next balls. Keyboard (not ranked): ← → aim, A D hook,
+  hold space to charge and release to throw.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const STORE = 'mugicBowling';
+const opts = { full: 600, range: 20 };
+try { Object.assign(opts, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(STORE, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → aim, A D hook, space',
+  axes: ['yaw', 'roll'],
+  extraRows: [
+    ['Full power at', `<input type="range" id="full" min="150" max="1500" step="50">`, 'fullVal'],
+    ['Aim edge at', `<input type="range" id="range" min="8" max="40">`, 'rangeVal'],
+  ],
+});
+$('full').value = opts.full; $('fullVal').textContent = opts.full;
+$('full').oninput = e => { opts.full = +e.target.value; $('fullVal').textContent = opts.full; saveOpts(); };
+$('range').value = opts.range; $('rangeVal').textContent = '±' + opts.range + '°';
+$('range').oninput = e => { opts.range = +e.target.value; $('rangeVal').textContent = '±' + opts.range + '°'; saveOpts(); };
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, CX = W / 2;
+// lane, in meters: x across (0 = center), z down the lane from the foul line
+const LANE = 0.53, GUTTER = 0.66, HEAD = 18.29, PIT = 19.4, BALL_R = 0.109, PIN_R = 0.061;
+const BALL_M = 6.8, PIN_M = 1.5, E_BALL = 0.7, E_PIN = 0.85, PIN_FRICTION = 2;
+const V_MIN = 5.5, V_MAX = 9.5, AIM_MAX = 3, HOOK = 1.1, HOOK_FROM = 8, SPIN_TILT = 35;   // m/s, deg, m/s² at full hook, z where it bites, deg
+const PIN_SPOTS = (() => {
+  const s = [], dz = 0.264, dx = 0.1524;
+  for (let row = 0; row < 4; ++row) for (let k = 0; k <= row; ++k) s.push([(k * 2 - row) * dx, HEAD + row * dz]);
+  return s;
+})();
+
+const game = { state: 'title', hi: 0, keyboard: false };
+try { game.hi = +localStorage.getItem('mugicBowlingHi') || 0; } catch (e) {}
+const keys = {};
+let keyAim = 0, keySpin = 0, charge = null, measuring = null;
+const history = [];
+
+function newGame() {
+  Object.assign(game, { state: 'aim', rolls: [], frame: 0, ball: null, msg: '', msgT: 0, keyboard: false, last: null });
+  rack(true);
+}
+function rack(full) {
+  if (full) game.pins = PIN_SPOTS.map(([x, z], i) => ({ n: i + 1, x, z, vx: 0, vz: 0, x0: x, z0: z, down: false, gone: false, a: 0 }));
+  else game.pins = game.pins.filter(p => !p.down).map(p => ({ ...p, vx: 0, vz: 0 }));
+}
+
+// ---------- scoring (10 frames, strikes and spares count the following balls) ----------
+function frames(rolls) {
+  const out = []; let i = 0;
+  for (let f = 0; f < 10 && i < rolls.length; ++f) {
+    const a = rolls[i], b = rolls[i + 1], c = rolls[i + 2];
+    if (f === 9) { out.push({ rolls: rolls.slice(i), score: b !== undefined && (a === 10 || a + b === 10 ? c !== undefined : true) ? a + (b || 0) + (c || 0) : null }); break; }
+    if (a === 10) { out.push({ rolls: [10], score: b !== undefined && c !== undefined ? 10 + b + c : null }); i += 1; }
+    else { out.push({ rolls: b === undefined ? [a] : [a, b], score: b === undefined ? null : a + b === 10 ? (c !== undefined ? 10 + c : null) : a + b }); i += 2; }
+  }
+  let total = 0;
+  for (const fr of out) { if (fr.score === null) { fr.total = null; total = null; } else if (total !== null) { total += fr.score; fr.total = total; } }
+  return out;
+}
+const total = () => { const fs = frames(game.rolls); let t = 0; for (const f of fs) if (f.total != null) t = f.total; return t; };
+// where we are: frame index, ball within the frame, and whether the rack is fresh
+function position() {
+  const fs = frames(game.rolls), r = game.rolls;
+  if (!fs.length) return { frame: 0, ball: 0, fresh: true, done: false };
+  const last = fs[fs.length - 1], f = fs.length - 1;
+  if (f < 9) {
+    const complete = last.rolls[0] === 10 || last.rolls.length === 2;
+    return complete ? { frame: f + 1, ball: 0, fresh: true, done: false } : { frame: f, ball: 1, fresh: false, done: false };
+  }
+  const t = last.rolls, n = t.length;
+  // tenth frame: a strike or a spare earns more balls on a fresh rack
+  if (n === 1) return { frame: 9, ball: 1, fresh: t[0] === 10, done: false };
+  if (n === 2) {
+    if (t[0] === 10) return { frame: 9, ball: 2, fresh: t[1] === 10, done: false };
+    return t[0] + t[1] === 10 ? { frame: 9, ball: 2, fresh: true, done: false } : { frame: 9, ball: 2, done: true };
+  }
+  return { frame: 9, ball: n, done: n >= 3, fresh: n === 0 };
+}
+
+// ---------- aiming and throwing ----------
+const clamp1 = v => Math.max(-1, Math.min(1, v));
+const aimNow = () => Mugic.connected ? clamp1(Mugic.yaw / opts.range) * AIM_MAX : keyAim;
+const spinNow = () => Mugic.connected ? clamp1(Mugic.roll / SPIN_TILT) : keySpin;
+function before(ms) {   // the pose just before the swing (the swing itself scrambles the angles)
+  const t = performance.now() - ms;
+  for (let i = history.length - 1; i >= 0; --i) if (history[i].t <= t) return history[i];
+  return history[0] || { aim: aimNow(), spin: spinNow() };
+}
+function throwBall(power, aim, spin) {
+  const v = V_MIN + (V_MAX - V_MIN) * Math.max(0, Math.min(1, power)), a = aim * Math.PI / 180;
+  game.ball = { x: 0, z: 0, vx: v * Math.sin(a), vz: v * Math.cos(a), spin, gutter: false, roll: 0, t: 0 };
+  game.last = { power: Math.max(0, Math.min(1, power)), aim, spin, speed: v };
+  game.state = 'roll'; game.rollT = 0;
+}
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'title' || game.state === 'over') { newGame(); return; }
+  if (game.state !== 'aim' || measuring) return;
+  const b = before(250);
+  measuring = { peak: Mugic.energy, until: performance.now() + 160, aim: b.aim, spin: b.spin };
+};
+
+function step(h) {
+  const g = game, b = g.ball;
+  b.t += h; b.roll += Math.hypot(b.vx, b.vz) * h / BALL_R;
+  if (!b.gutter) {
+    if (b.z > HOOK_FROM && b.z < HEAD) b.vx += b.spin * HOOK * (7 / Math.max(5, b.vz)) * h;   // the hook bites on the dry back end
+    if (Math.abs(b.x) > LANE - 0.02 && b.z < HEAD - 0.3) { b.gutter = true; b.x = Math.sign(b.x) * (GUTTER - BALL_R * 0.6); b.vx = 0; }
+  }
+  b.x += b.vx * h; b.z += b.vz * h;
+  const pins = g.pins.filter(p => !p.gone);
+  const collide = (a, ma, ra, p, mp, rp, e) => {
+    const dx = p.x - a.x, dz = p.z - a.z, d = Math.hypot(dx, dz);
+    if (d >= ra + rp || d < 1e-9) return false;
+    const nx = dx / d, nz = dz / d, over = ra + rp - d, im = 1 / ma + 1 / mp;
+    a.x -= nx * over * (1 / ma) / im; a.z -= nz * over * (1 / ma) / im; p.x += nx * over * (1 / mp) / im; p.z += nz * over * (1 / mp) / im;
+    const vn = (p.vx - a.vx) * nx + (p.vz - a.vz) * nz;
+    if (vn < 0) { const j = -(1 + e) * vn / im; a.vx -= j / ma * nx; a.vz -= j / ma * nz; p.vx += j / mp * nx; p.vz += j / mp * nz; }
+    return true;
+  };
+  if (!b.gutter) for (const p of pins) if (collide(b, BALL_M, BALL_R, p, PIN_M, PIN_R, E_BALL)) p.down = true;
+  for (let i = 0; i < pins.length; ++i) for (let j = i + 1; j < pins.length; ++j) {
+    const p = pins[i], q = pins[j], sp = Math.hypot(p.vx - q.vx, p.vz - q.vz);
+    if (collide(p, PIN_M, PIN_R, q, PIN_M, PIN_R, E_PIN) && sp > 0.15) { p.down = true; q.down = true; }
+  }
+  for (const p of pins) {
+    const s = Math.hypot(p.vx, p.vz);
+    if (s > 0) { const k = Math.max(0, s - PIN_FRICTION * h) / s; p.vx *= k; p.vz *= k; }
+    p.x += p.vx * h; p.z += p.vz * h; p.a += s * h * 6;
+    if (s > 0.3 || Math.hypot(p.x - p.x0, p.z - p.z0) > 0.05) p.down = true;
+    if (p.down && !p.fell && s > 0.4) topple(p, pins, s);
+    if (p.z > PIT || Math.abs(p.x) > GUTTER + 0.1) p.gone = true;
+  }
+}
+
+// a knocked pin falls the way it's moving; its length (38 cm) sweeps down standing pins in that line
+function topple(p, pins, s) {
+  p.fell = true;
+  const ux = p.vx / s, uz = p.vz / s, L = 0.34;
+  for (const q of pins) {
+    if (q === p || q.down) continue;
+    const t = (q.x - p.x) * ux + (q.z - p.z) * uz;
+    if (t <= 0 || t > L) continue;
+    if (Math.hypot(q.x - p.x - ux * t, q.z - p.z - uz * t) < PIN_R * 1.6) { q.down = true; q.vx += ux * s * 0.5; q.vz += uz * s * 0.5; }
+  }
+}
+
+function update(dt) {
+  const g = game, now = performance.now();
+  history.push({ t: now, aim: aimNow(), spin: spinNow() });
+  while (history.length && history[0].t < now - 1000) history.shift();
+  g.msgT -= dt;
+  if (keys.ArrowLeft) keyAim = Math.max(-AIM_MAX, keyAim - 2 * dt);
+  if (keys.ArrowRight) keyAim = Math.min(AIM_MAX, keyAim + 2 * dt);
+  if (keys.KeyA) keySpin = Math.max(-1, keySpin - 1.5 * dt);
+  if (keys.KeyD) keySpin = Math.min(1, keySpin + 1.5 * dt);
+  if (charge !== null) charge = Math.min(1, charge + dt / 1.2);
+  if (measuring && now >= measuring.until) {
+    const m = measuring; measuring = null;
+    throwBall((m.peak - Mugic.settings.thresh) / (opts.full - Mugic.settings.thresh), m.aim, m.spin);
+    g.last.peak = Math.round(m.peak);
+  } else if (measuring) measuring.peak = Math.max(measuring.peak, Mugic.energy);
+  if (g.state === 'roll') {
+    for (let i = 0; i < 10; ++i) step(dt / 10);
+    g.rollT += dt;
+    const b = g.ball, still = g.pins.every(p => p.gone || Math.hypot(p.vx, p.vz) < 0.03);
+    if ((b.z > PIT && still) || g.rollT > 9) endRoll();
+  } else if (g.state === 'result') {
+    g.resultT -= dt;
+    if (g.resultT <= 0) nextBall();
+  }
+}
+function endRoll() {
+  const g = game;
+  const standingBefore = g.pins.length, down = g.pins.filter(p => p.down).length;
+  g.rolls.push(down);
+  const strike = standingBefore === 10 && down === 10;
+  const spare = !strike && down === standingBefore && standingBefore < 10;
+  g.msg = strike ? 'STRIKE!' : spare ? 'SPARE!' : g.ball.gutter && !down ? 'GUTTER' : down ? `${down} PIN${down > 1 ? 'S' : ''}` : 'MISS';
+  g.state = 'result'; g.resultT = 1.6;
+}
+function nextBall() {
+  const g = game, pos = position();
+  if (pos.done) return over();
+  rack(pos.fresh);
+  g.ball = null; g.state = 'aim';
+}
+
+const ranked = () => !game.keyboard;
+function over() {
+  const g = game, t = total();
+  g.state = 'over'; g.final = t;
+  if (t > g.hi) { g.hi = t; try { localStorage.setItem('mugicBowlingHi', g.hi); } catch (e) {} }
+  if (t > 0 && ranked()) Scores.submit({ game: 'bowling', score: t }).then(showBoard);
+}
+const showBoard = () => Scores.top('bowling').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+addEventListener('keydown', e => {
+  if (['ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+  if (Scores.busy()) return;
+  if (['ArrowLeft', 'ArrowRight', 'KeyA', 'KeyD'].includes(e.code) && game.state === 'aim') game.keyboard = true;
+  keys[e.code] = true;
+  if (e.code === 'Space' && !e.repeat) {
+    if (game.state === 'title' || game.state === 'over') newGame();
+    else if (game.state === 'aim') charge = 0;
+  }
+});
+addEventListener('keyup', e => {
+  keys[e.code] = false;
+  if (e.code === 'Space' && charge !== null && game.state === 'aim') { game.keyboard = true; throwBall(charge, keyAim, keySpin); }
+  if (e.code === 'Space') charge = null;
+});
+
+// ---------- drawing: perspective down the lane, the camera following the ball ----------
+const CAM_Y = 1.25, F = 520, HOR = 96;
+let camZ = -3;
+const proj = (x, y, z) => { const d = Math.max(0.05, z - camZ); return [CX + x * F / d, HOR + (CAM_Y - y) * F / d, F / d]; };
+function text(s, x, y, align = 'center', size = 16, color = '#fff') { ctx.fillStyle = color; ctx.font = `bold ${size}px ui-monospace, Menlo, monospace`; ctx.textAlign = align; ctx.fillText(s, x, y); }
+function poly(pts, fill) { ctx.fillStyle = fill; ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); }
+function quad(x0, x1, z0, z1, fill, y = 0) { z0 = Math.max(z0, camZ + 0.3); if (z1 <= z0) return; poly([proj(x0, y, z0), proj(x1, y, z0), proj(x1, y, z1), proj(x0, y, z1)], fill); }
+
+function drawPin(p) {
+  const [sx, sy, s] = proj(p.x, 0, p.z), h = 0.38 * s, w = 0.12 * s;
+  if (p.down && !p.gone) {
+    // lying down, pointing the way it was knocked
+    ctx.save(); ctx.translate(sx, sy - w * 0.4); ctx.rotate(Math.atan2(p.vx, 0.01 + Math.abs(p.vz)) + (p.n % 2 ? 1.2 : -1.2) + p.a * 0.05);
+    ctx.fillStyle = '#f4f4f0'; ctx.beginPath(); ctx.ellipse(0, 0, h * 0.45, w * 0.5, 0, 0, 2 * Math.PI); ctx.fill();
+    ctx.fillStyle = '#d22'; ctx.fillRect(-h * 0.2, -w * 0.45, w * 0.25, w * 0.9); ctx.restore();
+    return;
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.ellipse(sx, sy, w * 0.6, w * 0.2, 0, 0, 2 * Math.PI); ctx.fill();
+  ctx.fillStyle = '#f7f7f2'; ctx.beginPath();
+  ctx.moveTo(sx - w * 0.28, sy); ctx.bezierCurveTo(sx - w * 0.62, sy - h * 0.35, sx - w * 0.2, sy - h * 0.6, sx - w * 0.17, sy - h * 0.7);
+  ctx.bezierCurveTo(sx - w * 0.35, sy - h * 0.85, sx - w * 0.2, sy - h, sx, sy - h);
+  ctx.bezierCurveTo(sx + w * 0.2, sy - h, sx + w * 0.35, sy - h * 0.85, sx + w * 0.17, sy - h * 0.7);
+  ctx.bezierCurveTo(sx + w * 0.2, sy - h * 0.6, sx + w * 0.62, sy - h * 0.35, sx + w * 0.28, sy); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#d22'; ctx.fillRect(sx - w * 0.2, sy - h * 0.74, w * 0.4, h * 0.035); ctx.fillRect(sx - w * 0.21, sy - h * 0.68, w * 0.42, h * 0.035);
+}
+function drawBall(b) {
+  const [sx, sy, s] = proj(b.x, BALL_R, b.z), r = BALL_R * s;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(sx, sy + r * 0.95, r, r * 0.3, 0, 0, 2 * Math.PI); ctx.fill();
+  const gr = ctx.createRadialGradient(sx - r * 0.35, sy - r * 0.4, r * 0.1, sx, sy, r);
+  gr.addColorStop(0, '#9ad0ff'); gr.addColorStop(0.5, '#2a5bd7'); gr.addColorStop(1, '#0c1d55');
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(sx, sy, r, 0, 2 * Math.PI); ctx.fill();
+  ctx.fillStyle = '#081030';   // finger holes, turning as it rolls
+  for (const [dx, dy] of [[-0.25, -0.3], [0.05, -0.38], [0, 0.1]]) {
+    const yy = dy * Math.cos(b.roll) * r, vis = Math.cos(b.roll + dy) > -0.2;
+    if (vis) { ctx.beginPath(); ctx.arc(sx + dx * r, sy + yy, r * 0.09, 0, 2 * Math.PI); ctx.fill(); }
+  }
+}
+function drawSheet() {
+  const fs = frames(game.rolls || []), x0 = 20, y0 = 8, fw = 55, h = 44;
+  ctx.fillStyle = 'rgba(10,14,28,0.85)'; ctx.fillRect(x0 - 6, y0 - 4, fw * 10 + 34, h + 8);
+  for (let f = 0; f < 10; ++f) {
+    const x = x0 + f * fw, w = f === 9 ? fw + 22 : fw, fr = fs[f], cur = game.state !== 'over' && game.state !== 'title' && position().frame === f;
+    ctx.strokeStyle = cur ? '#ffd23f' : '#56607a'; ctx.lineWidth = cur ? 2 : 1; ctx.strokeRect(x, y0, w, h);
+    text(String(f + 1), x + 4, y0 + 11, 'left', 9, '#8a93a8');
+    if (!fr) continue;
+    // X strike, / spare, - nothing, counting the pins standing before each ball
+    const marks = []; let standing = 10;
+    fr.rolls.forEach((v, i) => {
+      if (standing === 10 && v === 10) marks.push('X');
+      else if (v === standing) { marks.push('/'); standing = 10; return; }
+      else { marks.push(v ? String(v) : '-'); standing -= v; return; }
+      standing = 10;
+    });
+    marks.forEach((m, i) => text(m, x + w - 8 - (marks.length - 1 - i) * 13, y0 + 16, 'center', 12, m === 'X' ? '#ffd23f' : m === '/' ? '#4dff88' : '#fff'));
+    if (fr.total != null) text(String(fr.total), x + w / 2, y0 + 38, 'center', 14);
+  }
+}
+function draw() {
+  const g = game;
+  // the camera trails the ball down the lane
+  const want = g.ball ? Math.min(g.ball.z - 3.2, HEAD - 5.5) : -3;
+  camZ += (Math.max(-3, want) - camZ) * 0.08;
+  const bg = ctx.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#120c22'); bg.addColorStop(1, '#2b1838');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  // approach, gutters, lane, pin deck, pit
+  quad(-GUTTER - 0.4, GUTTER + 0.4, camZ, PIT, '#3b2a4a');
+  quad(-GUTTER, GUTTER, camZ, PIT, '#202028');
+  quad(-LANE, LANE, -4, HEAD - 0.6, '#d9a865');
+  quad(-LANE, LANE, HEAD - 0.6, PIT - 0.4, '#e6bf86');
+  ctx.strokeStyle = 'rgba(120,70,20,0.25)'; ctx.lineWidth = 1;
+  for (let k = -19; k <= 19; k += 2) { const a = proj(k * LANE / 19.5, 0, Math.max(camZ + 0.3, -4)), b = proj(k * LANE / 19.5, 0, PIT - 0.4); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+  quad(-LANE, LANE, -0.02, 0.02, '#c0392b');                       // foul line
+  for (let k = -3; k <= 3; ++k) {                                   // target arrows at 15 ft
+    const x = k * 5 * LANE / 19.5, z = 4.6 + Math.abs(k) * 0.3;
+    if (z > camZ + 0.3) poly([proj(x, 0, z + 0.25), proj(x - 0.03, 0, z), proj(x + 0.03, 0, z)], '#5a3416');
+  }
+  const pitTop = proj(0, 0.9, PIT)[1], pitBot = proj(0, 0, PIT)[1], pl = proj(-GUTTER - 0.4, 0, PIT)[0], pr = proj(GUTTER + 0.4, 0, PIT)[0];
+  ctx.fillStyle = '#07060c'; ctx.fillRect(pl, pitTop, pr - pl, pitBot - pitTop);
+  ctx.fillStyle = '#ff6bd6'; ctx.font = `bold ${Math.max(8, (pr - pl) / 10)}px ui-monospace, Menlo, monospace`; ctx.textAlign = 'center'; ctx.fillText('MUGIC LANES', CX, pitTop + (pitBot - pitTop) * 0.45);
+  // pins and ball, far to near
+  if (g.pins) {
+    const things = g.pins.filter(p => !p.gone).map(p => ({ z: p.z, draw: () => drawPin(p) }));
+    if (g.ball && !g.ball.gutter) things.push({ z: g.ball.z, draw: () => drawBall(g.ball) });
+    things.sort((a, b) => b.z - a.z).forEach(t => t.draw());
+    if (g.ball && g.ball.gutter) drawBall(g.ball);
+  }
+  drawSheet();
+  if (g.state === 'title') {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+    text('BOWLING', CX, 170, 'center', 48, '#ffd23f');
+    text('point to aim · twist for hook · swing and flick to bowl', CX, 215, 'center', 15);
+    text('flick or space to start', CX, 290, 'center', 18, '#4dff88');
+    text('HI ' + g.hi, CX, 330, 'center', 15, '#ffd23f');
+    return;
+  }
+  if (g.state === 'aim') {
+    // aim line and hook preview from where the ball starts
+    const aim = aimNow() * Math.PI / 180, spin = spinNow();
+    ctx.setLineDash([6, 6]); ctx.strokeStyle = 'rgba(255,210,63,0.9)'; ctx.lineWidth = 2; ctx.beginPath();
+    let x = 0, vx = 7 * Math.sin(aim);
+    for (let z = 0.3; z <= HEAD; z += 0.3) {
+      if (z > HOOK_FROM) vx += spin * HOOK * (0.3 / 7);
+      x += vx * 0.3 / 7; const p = proj(Math.max(-LANE, Math.min(LANE, x)), 0.01, z);
+      z === 0.3 ? ctx.moveTo(p[0], p[1]) : ctx.lineTo(p[0], p[1]);
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+    drawBall({ x: 0, z: 0.35, roll: 0 });
+    text(`aim ${aimNow() >= 0 ? '+' : ''}${aimNow().toFixed(1)}°   hook ${spin > 0.03 ? '→' : spin < -0.03 ? '←' : ''} ${Math.round(Math.abs(spin) * 100)}%`, CX, H - 40, 'center', 15, '#ffd23f');
+    text(charge !== null ? `power ${Math.round(charge * 100)}%` : 'swing and flick to bowl', CX, H - 16, 'center', 14, '#4dff88');
+  }
+  if (g.last && g.state !== 'aim') text(`speed ${(g.last.speed * 3.6).toFixed(0)} km/h · hook ${Math.round(g.last.spin * 100)}%`, W - 10, H - 12, 'right', 12, '#c8d0e0');
+  if (g.keyboard) text('KEYBOARD · NOT RANKED', 10, H - 12, 'left', 11, '#ffb0b0');
+  if (g.state === 'result') { text(g.msg, CX, 300, 'center', 44, g.msg === 'STRIKE!' ? '#ffd23f' : g.msg === 'SPARE!' ? '#4dff88' : '#fff'); }
+  if (g.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 70, W, H - 70);
+    text('GAME OVER', CX, 190, 'center', 40, '#ffd23f');
+    text(`SCORE ${g.final}`, CX, 240, 'center', 26);
+    text('flick or space to bowl again', CX, 290, 'center', 16, '#4dff88');
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state !== 'title' && game.state !== 'over' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

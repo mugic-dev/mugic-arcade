@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Sky Shield</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>SKY SHIELD</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="500"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, point the MUGIC at the middle of the screen and click Calibrate center. Point it like a laser
+  pointer — yaw (or roll) moves the crosshair left/right, pitch up/down — and flick to launch an interceptor from the
+  nearest base with ammo. Its blast destroys incoming missiles; protect the six cities. Leftover ammo and cities score a
+  bonus after each wave. Keyboard (not ranked): arrows aim, space fires.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const STORE = 'mugicDefense';
+const opts = { range: 25, axis: 'yaw' };
+try { Object.assign(opts, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(STORE, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows aim, space fires',
+  axes: ['yaw', 'roll', 'pitch'],
+  extraRows: [
+    ['Left/right from', `<select id="axis"><option value="yaw">yaw (point)</option><option value="roll">roll (tilt)</option></select>`, 'axisVal'],
+    ['Screen edge at', `<input type="range" id="range" min="10" max="45">`, 'rangeVal'],
+  ],
+});
+$('axis').value = opts.axis; $('axis').onchange = e => { opts.axis = e.target.value; saveOpts(); };
+$('range').value = opts.range; $('rangeVal').textContent = '±' + opts.range + '°';
+$('range').oninput = e => { opts.range = +e.target.value; $('rangeVal').textContent = '±' + opts.range + '°'; saveOpts(); };
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, GROUND = H - 40, SKY_BOTTOM = GROUND - 30;
+const BASES_X = [50, 320, 590], CITIES_X = [130, 185, 240, 400, 455, 510];
+const AMMO = 10, BLAST_R = 38, BONUS_CITY = 10000;
+const game = { state: 'title', hi: 0, keyboard: false };
+try { game.hi = +localStorage.getItem('mugicDefenseHi') || 0; } catch (e) {}
+const keys = {};
+const cursor = { x: W / 2, y: H / 2 };
+
+function newGame() {
+  Object.assign(game, { state: 'play', score: 0, wave: 0, keyboard: false, cities: CITIES_X.map(() => true), nextBonus: BONUS_CITY });
+  newWave();
+}
+function newWave() {
+  const g = game;
+  ++g.wave;
+  Object.assign(g, {
+    bases: BASES_X.map(() => ({ ammo: AMMO, alive: true })), enemies: [], shots: [], blasts: [], planes: [],
+    toSpawn: 10 + 2 * g.wave, spawnT: 1, planeT: g.wave >= 2 ? 6 + Math.random() * 6 : Infinity, phase: 'wave', msg: `WAVE ${g.wave}`, msgT: 2,
+  });
+}
+const mult = () => Math.min(6, Math.ceil(game.wave / 2));
+const speed = () => Math.min(120, 26 + 9 * game.wave);
+
+function targets() {
+  const t = [];
+  game.cities.forEach((a, i) => t.push({ x: CITIES_X[i], y: GROUND }));
+  BASES_X.forEach(x => t.push({ x, y: GROUND - 14 }));
+  return t;
+}
+function launchEnemy(x0, y0, mirv = game.wave >= 3 && Math.random() < 0.22) {
+  const ts = targets(), t = ts[Math.floor(Math.random() * ts.length)];
+  const d = Math.hypot(t.x - x0, t.y - y0);
+  game.enemies.push({ x0, y0, x: x0, y: y0, tx: t.x, ty: t.y, vx: (t.x - x0) / d * speed(), vy: (t.y - y0) / d * speed(), mirv, splitY: 110 + Math.random() * 110 });
+}
+
+function fire() {
+  const g = game;
+  if (g.state !== 'play' || g.phase !== 'wave' || cursor.y > SKY_BOTTOM) return;
+  // the nearest base that still has ammo
+  const order = BASES_X.map((x, i) => i).filter(i => g.bases[i].alive && g.bases[i].ammo > 0).sort((a, b) => Math.abs(BASES_X[a] - cursor.x) - Math.abs(BASES_X[b] - cursor.x));
+  if (!order.length) return;
+  const i = order[0], b = g.bases[i], x0 = BASES_X[i], y0 = GROUND - 26, d = Math.hypot(cursor.x - x0, cursor.y - y0);
+  const v = i === 1 ? 760 : 540;
+  --b.ammo;
+  g.shots.push({ x0, y0, x: x0, y: y0, tx: cursor.x, ty: cursor.y, vx: (cursor.x - x0) / d * v, vy: (cursor.y - y0) / d * v });
+}
+function blast(x, y, big = false) { game.blasts.push({ x, y, t: 0, max: big ? 30 : BLAST_R, ground: big }); }
+const blastR = b => b.t < 0.5 ? b.max * b.t / 0.5 : b.t < 0.8 ? b.max : b.max * Math.max(0, 1 - (b.t - 0.8) / 0.6);
+
+function aim(dt) {
+  let tx = cursor.x, ty = cursor.y;
+  if (Mugic.connected) {
+    const h = opts.axis === 'roll' ? Mugic.roll : Mugic.yaw;
+    tx = W / 2 + Math.max(-1, Math.min(1, h / opts.range)) * (W / 2 - 10);
+    ty = SKY_BOTTOM / 2 - Math.max(-1, Math.min(1, Mugic.pitch / opts.range)) * (SKY_BOTTOM / 2 - 10);
+  }
+  if (keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown) {
+    game.keyboard = game.state === 'play' || game.keyboard;
+    tx = cursor.x + ((keys.ArrowRight ? 1 : 0) - (keys.ArrowLeft ? 1 : 0)) * 420 * dt;
+    ty = cursor.y + ((keys.ArrowDown ? 1 : 0) - (keys.ArrowUp ? 1 : 0)) * 420 * dt;
+  }
+  const k = 1 - Math.exp(-dt / 0.05);   // a little smoothing against sensor jitter
+  cursor.x = Math.max(6, Math.min(W - 6, cursor.x + (tx - cursor.x) * k));
+  cursor.y = Math.max(6, Math.min(SKY_BOTTOM, cursor.y + (ty - cursor.y) * k));
+}
+
+function update(dt) {
+  const g = game;
+  g.msgT -= dt;
+  if (g.phase === 'bonus') { g.bonusT -= dt; if (g.bonusT <= 0) { if (!g.cities.some(c => c)) return over(); newWave(); } return; }
+  // spawning: salvos from the top, and planes that drop missiles
+  g.spawnT -= dt;
+  if (g.toSpawn > 0 && g.spawnT <= 0) {
+    const n = Math.min(g.toSpawn, 1 + Math.floor(Math.random() * Math.min(4, 1 + g.wave / 2)));
+    for (let k = 0; k < n; ++k) launchEnemy(20 + Math.random() * (W - 40), 0);
+    g.toSpawn -= n; g.spawnT = Math.max(1.2, 4 - 0.25 * g.wave) * (0.6 + Math.random() * 0.8);
+  }
+  g.planeT -= dt;
+  if (g.planeT <= 0 && g.toSpawn > 0) {
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    g.planes.push({ x: dir > 0 ? -30 : W + 30, y: 70 + Math.random() * 90, vx: dir * (60 + 4 * g.wave), dropT: 1.5 });
+    g.planeT = 10 + Math.random() * 8;
+  }
+  for (const p of g.planes) {
+    p.x += p.vx * dt; p.dropT -= dt;
+    if (p.dropT <= 0 && p.x > 40 && p.x < W - 40 && g.toSpawn > 0) { launchEnemy(p.x, p.y + 8, false); --g.toSpawn; p.dropT = 2 + Math.random() * 2; }
+  }
+  g.planes = g.planes.filter(p => p.x > -40 && p.x < W + 40 && !p.dead);
+  // interceptors fly to the crosshair and burst there
+  for (const s of g.shots) {
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    if ((s.tx - s.x) * s.vx + (s.ty - s.y) * s.vy <= 0) { s.done = true; blast(s.tx, s.ty); }
+  }
+  g.shots = g.shots.filter(s => !s.done);
+  // incoming missiles: split (MIRV), hit the ground
+  const born = [];
+  for (const e of g.enemies) {
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    if (e.mirv && e.y > e.splitY) {
+      e.mirv = false;
+      for (let k = 0; k < 2; ++k) { launchEnemy(e.x, e.y, false); born.push(g.enemies.pop()); }
+    }
+    if (e.y >= e.ty) {
+      e.dead = true; blast(e.tx, e.ty, true);
+      const c = CITIES_X.findIndex(x => Math.abs(x - e.tx) < 2), b = BASES_X.findIndex(x => Math.abs(x - e.tx) < 2);
+      if (c >= 0) g.cities[c] = false;
+      if (b >= 0) { g.bases[b].alive = false; g.bases[b].ammo = 0; }
+    }
+  }
+  g.enemies.push(...born);
+  // blasts destroy missiles and planes inside them
+  for (const b of g.blasts) {
+    b.t += dt;
+    if (b.ground) continue;
+    const r = blastR(b);
+    for (const e of g.enemies) if (!e.dead && Math.hypot(e.x - b.x, e.y - b.y) < r) { e.dead = true; addScore(25 * mult()); }
+    for (const p of g.planes) if (!p.dead && Math.hypot(p.x - b.x, p.y - b.y) < r + 10) { p.dead = true; addScore(100 * mult()); blast(p.x, p.y); }
+  }
+  g.blasts = g.blasts.filter(b => b.t < 1.4);
+  g.enemies = g.enemies.filter(e => !e.dead);
+  if (!g.cities.some(c => c) && !g.blasts.some(b => b.ground)) return over();
+  // wave over: tally the bonus
+  if (g.toSpawn === 0 && !g.enemies.length && !g.shots.length && !g.blasts.length && !g.planes.length) {
+    const ammo = g.bases.reduce((s, b) => s + b.ammo, 0), cities = g.cities.filter(c => c).length;
+    g.bonus = { ammo, cities, pts: (ammo * 5 + cities * 100) * mult() };
+    addScore(g.bonus.pts);
+    g.phase = 'bonus'; g.bonusT = 3;
+  }
+}
+function addScore(n) {
+  const g = game;
+  g.score += n;
+  if (g.score >= g.nextBonus) {
+    g.nextBonus += BONUS_CITY;
+    const i = g.cities.indexOf(false);
+    if (i >= 0) { g.cities[i] = true; g.msg = 'BONUS CITY!'; g.msgT = 2; }
+  }
+}
+
+const ranked = () => !game.keyboard;
+function over() {
+  const g = game;
+  g.state = 'over';
+  if (g.score > g.hi) { g.hi = g.score; try { localStorage.setItem('mugicDefenseHi', g.hi); } catch (e) {} }
+  if (g.score > 0 && ranked()) Scores.submit({ game: 'defense', score: g.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('defense').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => { if (Scores.busy()) return; if (game.state === 'play') fire(); else newGame(); };
+addEventListener('keydown', e => {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if (e.code === 'Space' && !e.repeat) { if (game.state === 'play') { game.keyboard = true; fire(); } else newGame(); }
+  if (e.code === 'Enter' && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- drawing ----------
+const stars = Array.from({ length: 70 }, () => [Math.random() * W, Math.random() * SKY_BOTTOM, Math.random()]);
+function text(s, x, y, align = 'center', size = 16, color = '#fff') { ctx.fillStyle = color; ctx.font = `bold ${size}px ui-monospace, Menlo, monospace`; ctx.textAlign = align; ctx.fillText(s, x, y); }
+function drawCity(x, alive) {
+  if (!alive) { ctx.fillStyle = '#3a2a2a'; ctx.fillRect(x - 18, GROUND - 5, 36, 5); return; }
+  ctx.fillStyle = '#4db8ff';
+  [[-18, 12, 10], [-8, 22, 8], [0, 16, 9], [9, 26, 7], [16, 10, 6]].forEach(([dx, h, w]) => ctx.fillRect(x + dx - 2, GROUND - h, w, h));
+  ctx.fillStyle = '#ffe680';
+  for (let k = 0; k < 5; ++k) ctx.fillRect(x - 15 + k * 7, GROUND - 7 - (k % 2) * 6, 2, 2);
+}
+function drawBase(i) {
+  const x = BASES_X[i], b = game.bases ? game.bases[i] : { ammo: AMMO, alive: true };
+  ctx.fillStyle = '#9b7b3a'; ctx.beginPath(); ctx.moveTo(x - 34, GROUND); ctx.lineTo(x - 18, GROUND - 22); ctx.lineTo(x + 18, GROUND - 22); ctx.lineTo(x + 34, GROUND); ctx.fill();
+  if (!b.alive) { text('OUT', x, GROUND - 6, 'center', 11, '#ff5a5a'); return; }
+  ctx.fillStyle = '#e8f0ff';
+  for (let k = 0; k < b.ammo; ++k) { const row = k < 4 ? 0 : k < 7 ? 1 : k < 9 ? 2 : 3, col = k - [0, 4, 7, 9][row]; ctx.fillRect(x - 12 + col * 7 + row * 3.5, GROUND - 6 - row * 5, 3, 4); }
+}
+function draw() {
+  const g = game;
+  const grd = ctx.createLinearGradient(0, 0, 0, GROUND); grd.addColorStop(0, '#02030a'); grd.addColorStop(1, '#14183a');
+  ctx.fillStyle = grd; ctx.fillRect(0, 0, W, H);
+  stars.forEach(([x, y, b]) => { ctx.fillStyle = `rgba(255,255,255,${0.2 + 0.5 * b})`; ctx.fillRect(x, y, 1.5, 1.5); });
+  ctx.fillStyle = '#c99a3c'; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#a87c28'; for (let x = 0; x < W; x += 24) ctx.fillRect(x, GROUND + 8 + (x % 48 ? 6 : 0), 12, 3);
+  CITIES_X.forEach((x, i) => drawCity(x, g.cities ? g.cities[i] : true));
+  BASES_X.forEach((x, i) => drawBase(i));
+  if (g.state === 'title') {
+    text('SKY SHIELD', W / 2, 150, 'center', 44);
+    text('point the MUGIC to aim · flick to fire', W / 2, 200, 'center', 16);
+    text('stop the missiles, save the cities', W / 2, 226, 'center', 16);
+    text('flick or space to start', W / 2, 290, 'center', 18, '#4dff88');
+    text('HI ' + g.hi, W / 2, 330, 'center', 15, '#ffd23f');
+  } else {
+    // missile trails
+    ctx.lineWidth = 1.5;
+    for (const e of g.enemies) {
+      ctx.strokeStyle = '#ff4d6d'; ctx.beginPath(); ctx.moveTo(e.x0, e.y0); ctx.lineTo(e.x, e.y); ctx.stroke();
+      ctx.fillStyle = e.mirv ? '#ffd23f' : '#fff'; ctx.fillRect(e.x - 1.5, e.y - 1.5, 3, 3);
+    }
+    for (const s of g.shots) {
+      ctx.strokeStyle = '#4dff88'; ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x, s.y); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(s.tx - 4, s.ty - 4); ctx.lineTo(s.tx + 4, s.ty + 4); ctx.moveTo(s.tx + 4, s.ty - 4); ctx.lineTo(s.tx - 4, s.ty + 4); ctx.stroke();
+    }
+    for (const p of g.planes) {
+      ctx.fillStyle = '#ff9f43'; ctx.save(); ctx.translate(p.x, p.y); ctx.scale(Math.sign(p.vx), 1);
+      ctx.beginPath(); ctx.ellipse(0, 0, 16, 5, 0, 0, 2 * Math.PI); ctx.fill(); ctx.fillRect(-6, -12, 6, 24); ctx.fillRect(-16, -7, 4, 8); ctx.restore();
+    }
+    const t = performance.now() / 60;
+    for (const b of g.blasts) {
+      const r = blastR(b);
+      ctx.fillStyle = ['#fff', '#ffd23f', '#ff6b6b', '#4dff88', '#6bc8ff'][Math.floor(t + b.x) % 5];
+      ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, 2 * Math.PI); ctx.fill();
+    }
+    // crosshair
+    ctx.strokeStyle = '#4dff88'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 9, 0, 2 * Math.PI);
+    ctx.moveTo(cursor.x - 15, cursor.y); ctx.lineTo(cursor.x - 5, cursor.y); ctx.moveTo(cursor.x + 5, cursor.y); ctx.lineTo(cursor.x + 15, cursor.y);
+    ctx.moveTo(cursor.x, cursor.y - 15); ctx.lineTo(cursor.x, cursor.y - 5); ctx.moveTo(cursor.x, cursor.y + 5); ctx.lineTo(cursor.x, cursor.y + 15); ctx.stroke();
+    text(`SCORE ${g.score}`, 10, 22, 'left', 15); text(`WAVE ${g.wave}  ×${mult()}`, W / 2, 22, 'center', 15); text(`HI ${g.hi}`, W - 10, 22, 'right', 15);
+    if (g.keyboard) text('KEYBOARD · NOT RANKED', 10, 42, 'left', 11, '#ffb0b0');
+    if (g.msgT > 0 && g.state === 'play') text(g.msg, W / 2, 180, 'center', 26, '#ffd23f');
+    if (g.phase === 'bonus' && g.state === 'play') {
+      text('WAVE CLEAR', W / 2, 160, 'center', 28, '#4dff88');
+      text(`ammo ${g.bonus.ammo} × 5   cities ${g.bonus.cities} × 100   × ${mult()}`, W / 2, 196, 'center', 15);
+      text(`BONUS ${g.bonus.pts}`, W / 2, 226, 'center', 20, '#ffd23f');
+    }
+    if (g.state === 'over') {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+      text('THE END', W / 2, 180, 'center', 44, '#ff4d6d');
+      text(`SCORE ${g.score}`, W / 2, 230, 'center', 22);
+      text('flick or space to play again', W / 2, 280, 'center', 16, '#4dff88');
+    }
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  aim(dt);
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
