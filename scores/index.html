@@ -38,7 +38,7 @@ function render() {
       Scores.top(g.id, { mode: 'hard', level: l, lowerIsBetter: true, limit: 10 }).then(rows => Scores.render($('l' + l), rows, ' moves', { dates: true }));
   } else {
     $('content').innerHTML = `<div class="scores"><h3>${g.board === 'LONGEST STREAK' ? 'LONGEST STREAKS' : 'TOP 100'}</h3><div id="board"></div></div>`;
-    Scores.top(g.id, { limit: 100 }).then(rows => Scores.render($('board'), rows, '', { dates: true }));
+    Scores.top(g.id, { limit: 100, lowerIsBetter: !!g.timed }).then(rows => Scores.render($('board'), rows, g.timed ? Scores.time : '', { dates: true }));
   }
 }
 render();

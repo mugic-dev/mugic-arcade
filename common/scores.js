@@ -2,7 +2,9 @@
 //   Scores.submit({ game, mode, level, score, quiet })  asks for initials and posts; requires a connected MUGIC.
 //     quiet: reuse the remembered initials without asking (only asks the first time), no notice if not posted
 //   Scores.top(game, { mode, level, lowerIsBetter, limit })  -> [{ initials, device, score, created_at }]
-//   Scores.render(el, rows, unit, { dates })  fills a table (dates: add a date column)
+//   Scores.render(el, rows, unit, { dates })  fills a table (unit: a suffix, or a function formatting the score;
+//     dates: add a date column)
+//   Scores.time(cs)  formats hundredths of a second as m:ss.cc (for timed games, lower is better)
 //   Scores.busy()  true while the initials dialog is open
 //   Scores.latest()  -> created_at of the newest score in any game (cheap change check), or null
 const Scores = (() => {
@@ -64,11 +66,13 @@ const Scores = (() => {
     return r.ok ? 'posted' : 'post failed: ' + r.status;
   }
 
+  const time = cs => `${Math.floor(cs / 6000)}:${String(Math.floor(cs / 100) % 60).padStart(2, '0')}.${String(cs % 100).padStart(2, '0')}`;
+
   function render(el, rows, unit = '', { dates = false } = {}) {
     const day = r => dates ? `<td class="sc-dev">${new Date(r.created_at).toLocaleDateString()}</td>` : '';
     el.innerHTML = rows.length
       ? '<table class="sc-table">' + rows.map((r, i) =>
-          `<tr><td>${i + 1}.</td><td>${r.initials}</td><td>${r.score}${unit}</td><td class="sc-dev">${r.device}</td>${day(r)}</tr>`).join('') + '</table>'
+          `<tr><td>${i + 1}.</td><td>${r.initials}</td><td>${typeof unit === 'function' ? unit(r.score) : r.score + unit}</td><td class="sc-dev">${r.device}</td>${day(r)}</tr>`).join('') + '</table>'
       : `<p class="sc-empty">${enabled() ? 'no scores yet' : 'scoreboard not configured'}</p>`;
   }
 
@@ -83,5 +87,5 @@ const Scores = (() => {
 
   const busy = () => !!document.querySelector('.sc-dialog');   // initials entry open: games ignore input
 
-  return { enabled, top, latest, submit, render, busy };
+  return { enabled, top, latest, submit, render, busy, time };
 })();

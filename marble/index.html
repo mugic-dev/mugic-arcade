@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Marble Rush</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>MARBLE RUSH</h1>
+<div id="bar"></div>
+<canvas id="game" width="640" height="480"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Connect, hold the MUGIC flat and click Calibrate center. Tilt it to roll the marble (roll: left/right on
+  screen, tip forward: up the screen); ramps speed it up. Race down each course to the checkered finish before the clock
+  runs out — leftover time carries over. Roll off an edge into the void, or drop too far, and the marble respawns at the
+  last checkpoint (the clock keeps going). Green slinkies knock you around. Keyboard (not ranked): arrows.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const STORE = 'mugicMarble';
+const opts = { range: 20 };
+try { Object.assign(opts, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(STORE, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'arrows',
+  axes: ['roll', 'pitch'],
+  extraRows: [['Full tilt at', `<input type="range" id="range" min="5" max="40">`, 'rangeVal']],
+});
+$('range').value = opts.range; $('rangeVal').textContent = '±' + opts.range + '°';
+$('range').oninput = e => { opts.range = +e.target.value; $('rangeVal').textContent = '±' + opts.range + '°'; saveOpts(); };
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const TILT = 10, SLOPE = 7, DAMP = 0.7, VMAX = 9, G = 22, STEP = 0.3, SHATTER = 3.2, R = 0.22;   // tiles, s
+const TW = 44, TH = 22, HZ = 14;   // iso tile size and height unit (px)
+
+// Courses: one row per y (going down the screen), one char per x. '0'-'9' flat at that height, ' ' void,
+// 'a'-'j' ramp falling toward +y from 1-10 to one less, 'A'-'J' ramp falling toward +x. Rows from `goal` on are the finish.
+const COURSES = [
+  { name: 'PRACTICE RACE', time: 35, start: [5, 2], checkpoints: [0, 14, 27], enemies: [], rows: [
+    '  999999  ', '  999999  ', '  999999  ', '  999999  ', '  iiiiii  ', '  888888  ', '  888888  ', '  hhhhhh  ',
+    '  777777  ', '  7777777 ', '   7777777', '    777777', '    gggggg', '    666666', '   666666 ', '  666666  ',
+    ' 666666   ', ' 666      ', ' 666      ', ' fff      ', ' 5555555  ', ' 5555555  ', '    55555 ', '     5555 ',
+    '     eeee ', '     4444 ', '   444444 ', '  4444    ', '  dddd    ', '  3333    ', '  33333333', '  33333333',
+    '      cccc', '      2222', '  22222222', '  bbbbbbbb', '  11111111', '  aaaaaaaa', '  00000000', '  00000000', '  00000000'],
+    goal: 38 },
+  { name: 'BEGINNER RACE', time: 30, start: [2, 1], checkpoints: [0, 12, 24, 34], enemies: [], rows: [
+    ' 9999     ', ' 9999     ', ' 99999999 ', ' 99999999 ', '      9999', '      9999', '      iiii', '      8888',
+    '      88  ', '      88  ', '  888888  ', '  88      ', '  88      ', '  hhhh    ', '  7777777 ', '  7777777 ',
+    '      77  ', '      77  ', '      55  ', '      55  ', '   555555 ', '   55     ', '   55     ', '   ee     ',
+    '   44     ', '   444444 ', '   444444 ', '       44 ', '       44 ', '       dd ', '   3333333', '   3333333',
+    '   33     ', '   cc     ', '   2222222', '   2222222', '   bbbbbbb', '   1111111', '   aaaaaaa', '   0000000', '   0000000'],
+    goal: 39 },
+  { name: 'INTERMEDIATE RACE', time: 30, start: [7, 1], checkpoints: [0, 11, 22, 32],
+    enemies: [{ y: 9, x0: 2, x1: 7, speed: 2.2 }, { y: 20, x0: 1, x1: 7, speed: 2.6 }, { y: 30, x0: 3, x1: 8, speed: 3 }], rows: [
+    '      9999', '      9999', '      iiii', '      8888', '  88888888', '  8       ', '  8       ', '  hh      ',
+    '  777777  ', '  777777  ', '  777777  ', '      7   ', '      7   ', '      7   ', '      gg  ', '      66  ',
+    '   666666 ', '   6      ', '   6      ', '   ff     ', ' 55555555 ', ' 55555555 ', '        5 ', '        5 ',
+    '        ee', '        44', '    444444', '    4     ', '    dd    ', '  333333  ', ' 33333333 ', ' 333333333',
+    '       33 ', '       cc ', '  2222222 ', '  bbbbbbb ', '  1111111 ', '  aaaaaaa ', '  0000000 ', '  0000000 ', '  0000000 '],
+    goal: 38 },
+];
+function tileAt(c, x, y) { const i = Math.floor(x), j = Math.floor(y); return (c.rows[j] || '')[i] || ' '; }
+function surf(c, x, y) {   // surface height at a point, -Infinity over the void
+  const t = tileAt(c, x, y);
+  if (t >= '0' && t <= '9') return +t;
+  if (t >= 'a' && t <= 'j') return t.charCodeAt(0) - 96 - (y - Math.floor(y));
+  if (t >= 'A' && t <= 'J') return t.charCodeAt(0) - 64 - (x - Math.floor(x));
+  return -Infinity;
+}
+function slopeOf(c, x, y) { const t = tileAt(c, x, y); return t >= 'a' && t <= 'j' ? [0, 1] : t >= 'A' && t <= 'J' ? [1, 0] : [0, 0]; }
+
+const game = { state: 'title', hi: 0, keyboard: false };
+try { game.hi = +localStorage.getItem('mugicMarbleHi') || 0; } catch (e) {}
+const keys = {};
+const tilt = { x: 0, y: 0 };
+
+function newGame() { Object.assign(game, { state: 'play', score: 0, level: 0, clock: 0, keyboard: false }); startLevel(); }
+function startLevel() {
+  const c = COURSES[game.level];
+  game.clock += c.time;
+  Object.assign(game, { c, cp: c.start, enemies: c.enemies.map(e => ({ ...e, x: e.x0 + 0.5 })), msg: c.name, msgT: 2, lost: 0 });
+  spawn();
+}
+function spawn() {
+  const [x, y] = game.cp;
+  game.ball = { x: x + 0.5, y: y + 0.5, z: surf(game.c, x + 0.5, y + 0.5), vx: 0, vy: 0, vz: 0, air: false, top: 0, spin: 0 };
+}
+
+function readTilt(dt) {
+  let tx = 0, ty = 0;
+  if (Mugic.connected) { tx = Math.max(-1, Math.min(1, Mugic.roll / opts.range)); ty = Math.max(-1, Math.min(1, Mugic.pitch / opts.range)); }
+  if (keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown) {
+    tx = (keys.ArrowRight ? 0.7 : 0) - (keys.ArrowLeft ? 0.7 : 0); ty = (keys.ArrowDown ? 0.7 : 0) - (keys.ArrowUp ? 0.7 : 0);
+    if (game.state === 'play') game.keyboard = true;
+  }
+  const k = 1 - Math.exp(-dt / 0.08);
+  tilt.x += (tx - tilt.x) * k; tilt.y += (ty - tilt.y) * k;
+}
+
+function lose(msg) { game.lost = 1.6; game.msg = msg; game.msgT = 1.6; }
+function update(dt) {
+  const g = game, c = g.c, b = g.ball;
+  g.clock -= dt; g.msgT -= dt;
+  if (g.clock <= 0) { g.clock = 0; return over(); }
+  for (const e of g.enemies) { e.x += e.speed * dt; if (e.x > e.x1 + 0.5 || e.x < e.x0 + 0.5) { e.speed = -e.speed; e.x = Math.max(e.x0 + 0.5, Math.min(e.x1 + 0.5, e.x)); } }
+  if (g.lost > 0) { g.lost -= dt; if (g.lost <= 0) spawn(); return; }
+  // tilt pushes along the screen: right = (+x, -y), down = (+x, +y)
+  const ax = (tilt.x + tilt.y) * TILT / Math.SQRT2, ay = (-tilt.x + tilt.y) * TILT / Math.SQRT2;
+  const N = 4, h = dt / N;
+  for (let s = 0; s < N; ++s) {
+    if (!b.air) {
+      const [sx, sy] = slopeOf(c, b.x, b.y);
+      b.vx += (ax + sx * SLOPE - DAMP * b.vx) * h; b.vy += (ay + sy * SLOPE - DAMP * b.vy) * h;
+    } else { b.vx += ax * 0.3 * h; b.vy += ay * 0.3 * h; }
+    const sp = Math.hypot(b.vx, b.vy); if (sp > VMAX) { b.vx *= VMAX / sp; b.vy *= VMAX / sp; }
+    // move one axis at a time so a step up blocks just that direction
+    for (const ax2 of ['x', 'y']) {
+      const old = b[ax2]; b[ax2] += (ax2 === 'x' ? b.vx : b.vy) * h;
+      const lead = b[ax2] + Math.sign(ax2 === 'x' ? b.vx : b.vy) * R;
+      const sh = ax2 === 'x' ? surf(c, lead, b.y) : surf(c, b.x, lead);
+      if (sh > b.z + STEP) { b[ax2] = old; if (ax2 === 'x') b.vx *= -0.3; else b.vy *= -0.3; }
+    }
+    const s0 = surf(c, b.x, b.y);
+    if (b.air) {
+      b.vz -= G * h; b.z += b.vz * h;
+      if (b.z <= s0) {
+        if (b.top - s0 > SHATTER) return lose('SHATTERED!');
+        b.z = s0; b.vz = 0; b.air = false;
+      }
+      if (b.z < -6) return lose('LOST IN SPACE!');
+    } else if (s0 < b.z - 0.15) { b.air = true; b.vz = 0; b.top = b.z; }   // rolled off an edge
+    else b.z = s0;
+  }
+  b.spin += Math.hypot(b.vx, b.vy) * dt * 3;
+  // slinkies bump the marble
+  for (const e of g.enemies) {
+    const ez = surf(c, e.x, e.y + 0.5);
+    if (Math.hypot(b.x - e.x, b.y - (e.y + 0.5)) < 0.55 && Math.abs(b.z - ez) < 0.8) {
+      const dx = b.x - e.x, dy = b.y - (e.y + 0.5), d = Math.hypot(dx, dy) || 1;
+      b.vx = dx / d * 6 + Math.sign(e.speed) * 2; b.vy = dy / d * 6;
+    }
+  }
+  // checkpoints and the finish
+  if (!b.air) {
+    const row = Math.floor(b.y);
+    for (const cy of c.checkpoints) if (row >= cy && cy > game.cp[1] - 0.5) {
+      const xs = [...c.rows[cy]].map((ch, i) => ch !== ' ' ? i : -1).filter(i => i >= 0);
+      game.cp = [xs[Math.floor(xs.length / 2)], cy];
+    }
+    if (row >= c.goal) finishLevel();
+  }
+}
+function finishLevel() {
+  const g = game, bonus = Math.round(g.clock) * 100;
+  g.score += 1000 * (g.level + 1) + bonus;
+  if (++g.level === COURSES.length) return over(true);
+  startLevel(); g.msg = `${g.c.name} · +${g.c.time}s`; g.msgT = 3;
+}
+
+const ranked = () => !game.keyboard;
+function over(won) {
+  const g = game;
+  g.state = 'over'; g.won = !!won;
+  if (g.score > g.hi) { g.hi = g.score; try { localStorage.setItem('mugicMarbleHi', g.hi); } catch (e) {} }
+  if (g.score > 0 && ranked()) Scores.submit({ game: 'marble', score: g.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('marble').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => { if (!Scores.busy() && game.state !== 'play') newGame(); };
+addEventListener('keydown', e => {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if ((e.code === 'Space' || e.code === 'Enter') && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- isometric drawing ----------
+const cam = { x: 0, y: 0 };
+const iso = (x, y, z) => [W / 2 + (x - y) * TW / 2 - cam.x, H * 0.38 + (x + y) * TH / 2 - z * HZ - cam.y];
+const THEMES = [['#6fd0ff', '#4fb0e8', '#2c7fb8', '#1d5e8a'], ['#ffd36b', '#f0b94a', '#c48a28', '#8f6219'], ['#c79bff', '#a77ce8', '#7650b8', '#53368a']];
+function text(s, x, y, align = 'center', size = 16, color = '#fff') { ctx.fillStyle = color; ctx.font = `bold ${size}px ui-monospace, Menlo, monospace`; ctx.textAlign = align; ctx.fillText(s, x, y); }
+function poly(pts, fill, stroke) { ctx.fillStyle = fill; ctx.beginPath(); pts.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); } }
+function cornerH(c, i, j, t) {   // heights at the tile's corners: (i,j) (i+1,j) (i+1,j+1) (i,j+1)
+  if (t >= '0' && t <= '9') return [+t, +t, +t, +t];
+  if (t >= 'a' && t <= 'j') { const h = t.charCodeAt(0) - 96; return [h, h, h - 1, h - 1]; }
+  const h = t.charCodeAt(0) - 64; return [h, h - 1, h - 1, h];
+}
+function drawTile(c, i, j, theme) {
+  const t = c.rows[j][i]; if (!t || t === ' ') return;
+  const [h0, h1, h2, h3] = cornerH(c, i, j, t), goal = j >= c.goal;
+  const ramp = !(t >= '0' && t <= '9');
+  // front faces down to the neighbor below them (or deep for the void)
+  const right = (c.rows[j] || '')[i + 1], front = (c.rows[j + 1] || '')[i];
+  const rH = right && right !== ' ' ? cornerH(c, i + 1, j, right) : null, fH = front && front !== ' ' ? cornerH(c, i, j + 1, front) : null;
+  const rb1 = rH ? Math.min(h1, rH[0]) : -4, rb2 = rH ? Math.min(h2, rH[3]) : -4, fb2 = fH ? Math.min(h2, fH[1]) : -4, fb3 = fH ? Math.min(h3, fH[0]) : -4;
+  if (rb1 < h1 || rb2 < h2) poly([iso(i + 1, j, h1), iso(i + 1, j + 1, h2), iso(i + 1, j + 1, rb2), iso(i + 1, j, rb1)], theme[2]);
+  if (fb3 < h3 || fb2 < h2) poly([iso(i, j + 1, h3), iso(i + 1, j + 1, h2), iso(i + 1, j + 1, fb2), iso(i, j + 1, fb3)], theme[3]);
+  const top = goal ? ((i + j) % 2 ? '#111' : '#f4f4f4') : ramp ? theme[1] : (i + j) % 2 ? theme[0] : theme[1];
+  poly([iso(i, j, h0), iso(i + 1, j, h1), iso(i + 1, j + 1, h2), iso(i, j + 1, h3)], top, 'rgba(0,0,0,0.12)');
+  if (ramp && !goal) {   // ramp stripes
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
+    for (const f of [0.25, 0.5, 0.75]) {
+      const a = t >= 'a' && t <= 'j' ? iso(i, j + f, h0 - f) : iso(i + f, j, h0 - f), b = t >= 'a' && t <= 'j' ? iso(i + 1, j + f, h0 - f) : iso(i + f, j + 1, h0 - f);
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+    }
+  }
+  if (c.checkpoints.includes(j) && j > 0 && i === [...c.rows[j]].findIndex(ch => ch !== ' ')) text('◆', ...iso(i + 0.5, j + 0.5, h0), 'center', 12, '#ff6bd6');
+}
+function drawBall(b) {
+  if (game.lost > 0 && game.msg === 'SHATTERED!') {
+    const k = 1.6 - game.lost, [x, y] = iso(b.x, b.y, b.z);
+    ctx.fillStyle = '#e8eef8'; for (let n = 0; n < 10; ++n) { const a = n * 0.63; ctx.fillRect(x + Math.cos(a) * k * 40, y - 6 + Math.sin(a) * k * 20 + k * k * 30, 4, 4); }
+    return;
+  }
+  const s = surf(game.c, b.x, b.y), [x, y] = iso(b.x, b.y, b.z), r = R * TW * 0.9;
+  if (s > -Infinity) { const [sx, sy] = iso(b.x, b.y, s); ctx.fillStyle = 'rgba(0,0,0,0.28)'; ctx.beginPath(); ctx.ellipse(sx, sy, r, r * 0.5, 0, 0, 2 * Math.PI); ctx.fill(); }
+  const gr = ctx.createRadialGradient(x - r * 0.35, y - r - r * 0.4, r * 0.1, x, y - r, r);
+  gr.addColorStop(0, '#ffffff'); gr.addColorStop(0.4, '#ff6b6b'); gr.addColorStop(1, '#8a1020');
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(x, y - r, r, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y - r, r * 0.6, b.spin, b.spin + 1.2); ctx.stroke();
+}
+function drawSlinky(e) {
+  const z = surf(game.c, e.x, e.y + 0.5), [x, y] = iso(e.x, e.y + 0.5, z), t = performance.now() / 120;
+  for (let k = 0; k < 5; ++k) { ctx.strokeStyle = k % 2 ? '#2bd65a' : '#a6ff6b'; ctx.lineWidth = 3; ctx.beginPath(); ctx.ellipse(x + Math.sin(t + k) * 2, y - 4 - k * 5 - Math.abs(Math.sin(t)) * 6, 9, 4, 0, 0, 2 * Math.PI); ctx.stroke(); }
+}
+function draw() {
+  const g = game, c = g.c || COURSES[0];
+  const bg = ctx.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, '#0b0820'); bg.addColorStop(1, '#22184a');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)'; for (let k = 0; k < 60; ++k) ctx.fillRect((k * 173) % W, (k * 97) % H, 1.5, 1.5);
+  const b = g.ball || { x: 5, y: (performance.now() / 600) % 36, z: 5 };
+  const target = [(b.x - b.y) * TW / 2, (b.x + b.y) * TH / 2 - b.z * HZ];
+  cam.x += (target[0] - cam.x) * 0.12; cam.y += (target[1] - cam.y) * 0.12;
+  const theme = THEMES[(g.level || 0) % THEMES.length];
+  // back to front: by i + j; the marble and slinkies go in at their place
+  const bk = Math.floor(b.x) + Math.floor(b.y), maxK = c.rows.length + 12;
+  for (let k = 0; k <= maxK; ++k) {
+    for (let j = Math.max(0, k - 11); j <= Math.min(k, c.rows.length - 1); ++j) drawTile(c, k - j, j, theme);
+    if (g.enemies) for (const e of g.enemies) if (Math.floor(e.x) + e.y === k) drawSlinky(e);
+    if (g.ball && k === bk + 1 && g.state !== 'title') drawBall(g.ball);
+  }
+  if (g.state === 'title') {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, W, H);
+    text('MARBLE RUSH', W / 2, 160, 'center', 46, '#ff6b6b');
+    text('tilt the MUGIC to race the marble down the course', W / 2, 208, 'center', 15);
+    text('3 races · beat the clock · mind the edges', W / 2, 234, 'center', 15);
+    text('flick or space to start', W / 2, 300, 'center', 18, '#4dff88');
+    text('HI ' + g.hi, W / 2, 340, 'center', 15, '#ffd23f');
+    return;
+  }
+  ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, 32);
+  text(`SCORE ${g.score}`, 10, 22, 'left', 15); text(c.name, W / 2, 22, 'center', 14, '#ffd23f');
+  text(`${Math.ceil(g.clock)}`, W - 12, 24, 'right', 22, g.clock < 10 ? '#ff5a5a' : '#fff');
+  if (g.keyboard) text('KEYBOARD · NOT RANKED', 10, H - 10, 'left', 11, '#ffb0b0');
+  if (g.msgT > 0 && g.state === 'play') text(g.msg, W / 2, 70, 'center', 22, '#ffd23f');
+  if (g.state === 'over') {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+    text(g.won ? 'ALL RACES DONE!' : 'TIME UP', W / 2, 180, 'center', 40, g.won ? '#4dff88' : '#ff5a5a');
+    text(`SCORE ${g.score}`, W / 2, 232, 'center', 24);
+    text('flick or space to race again', W / 2, 284, 'center', 16, '#4dff88');
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  readTilt(dt);
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>

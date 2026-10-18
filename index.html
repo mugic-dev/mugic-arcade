@@ -82,7 +82,7 @@ function renderAll() {
       const order = Array.from({ length: g.levels }, (_, i) => g.levels - i);
       Promise.all(order.map(l => Scores.top(g.id, { mode: 'hard', level: l, lowerIsBetter: true, limit: 1 })))
         .then(levels => Scores.render($('b-' + g.id), levels.flatMap((r, i) => r.map(x => ({ ...x, initials: `L${order[i]} ${x.initials}` }))).slice(0, 10), ' moves'));
-    } else Scores.top(g.id).then(rows => Scores.render($('b-' + g.id), rows));
+    } else Scores.top(g.id, { lowerIsBetter: !!g.timed }).then(rows => Scores.render($('b-' + g.id), rows, g.timed ? Scores.time : ''));
   }
 }
 // Draw the boards now; then, every 3 s while the page is shown, one cheap request for the newest score's time,

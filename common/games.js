@@ -1,5 +1,6 @@
 // The arcade's games, in menu order: folder/scoreboard id, display name, one-line blurb.
-// board: heading for its scores (default 'TOP 10'); levels: per-level records (fewest moves, hard mode).
+// board: heading for its scores (default 'TOP 10'); levels: per-level records (fewest moves, hard mode);
+// timed: the score is a time in hundredths of a second, lower is better.
 const GAMES = [
   { id: 'invaders', name: 'Alien Attack', blurb: 'Roll to steer the cannon, flick to fire.' },
   { id: 'pacman', name: 'Muncher', blurb: 'Pac-Man-style maze: roll and pitch steer like a joystick, tilt sets speed.' },
@@ -21,5 +22,7 @@ const GAMES = [
   { id: 'fruit', name: 'Fruit Slice', blurb: 'Point the MUGIC and swipe fast to slice the flying fruit. Combos, and never cut a bomb.' },
   { id: 'maze', name: 'Marble Maze', blurb: 'Labyrinth-style: the MUGIC is the board, tilt it to roll the ball past the holes into the goal.' },
   { id: 'bowling', name: 'Bowling', blurb: 'Point to aim, twist for hook, swing and flick to bowl. Ten frames, real scoring.' },
+  { id: 'slalom', name: 'Slalom', blurb: 'Downhill skiing: roll to carve through the gates, tip forward to tuck, flick to jump. Fastest time wins.', board: 'FASTEST', timed: true },
+  { id: 'marble', name: 'Marble Rush', blurb: 'Marble Madness-style: tilt the MUGIC to race the marble down isometric courses against the clock.' },
   { id: 'sokoban', name: 'Warehouse', short: 'WAREHOUSE HARD', blurb: 'Flick left/right/up/down to step and push crates, undo with a button.', board: 'LEVEL RECORDS', levels: 25 },
 ];
