@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Sky Rings</title>
+<link rel="stylesheet" href="../common/arcade.css">
+</head>
+<body>
+<a class="back" href="../">← arcade</a>
+<h1>SKY RINGS</h1>
+<div id="bar"></div>
+<canvas id="game" width="720" height="480"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Hold the MUGIC like a model plane, level, and click Calibrate center. The plane copies it: roll banks
+  (and banking turns), tip the nose up to climb and down to dive, yaw is the rudder. Flick for a 3 s boost.
+  Fly through the 15 rings in order, then the finish gate — 100 per ring plus a time bonus. Don't hit the ground!
+  The yellow arrow and the radar point to the next ring. Keyboard (not ranked): ← → bank, ↑ ↓ climb/dive, A D rudder,
+  W S throttle (also fine with the MUGIC), space start.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const STORE = 'mugicFlight';
+const opts = { invert: false, gain: 1 };
+try { Object.assign(opts, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(STORE, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: '← → ↑ ↓ A D W S',
+  axes: ['roll', 'pitch', 'yaw'],
+  extraRows: [
+    ['Invert pitch', `<label><input type="checkbox" id="inv"> pilot style: nose down climbs</label>`, 'invVal'],
+    ['Sensitivity', `<input type="range" id="gain" min="0.5" max="2" step="0.1">`, 'gainVal'],
+  ],
+});
+$('inv').checked = opts.invert; $('inv').onchange = e => { opts.invert = e.target.checked; saveOpts(); };
+$('gain').value = opts.gain; $('gainVal').textContent = '×' + opts.gain;
+$('gain').oninput = e => { opts.gain = +e.target.value; $('gainVal').textContent = '×' + opts.gain; saveOpts(); };
+
+const cv = $('game'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, CX = W / 2, CY = H / 2;
+const FOV = 70 * Math.PI / 180, F = CX / Math.tan(FOV / 2), NEAR = 2;
+const D2R = Math.PI / 180, G = 9.8;
+const MAX_BANK = 75, MAX_PITCH = 35, RUDDER_DEAD = 15, RUDDER_RATE = 10;   // degrees, deg/s
+const THRUST = 14, DRAG = 0.002, BOOST = 1.9, STALL = 36, VMAX = 150;     // m/s² at full throttle, 1/m, ×, m/s
+const RINGS = 15, RING_R = 35, GATE_R = 55, PAR = 300;                    // ring count, radii (m), par time (s)
+
+// ---------- terrain: fixed fractal value noise, water at 0 ----------
+const hash = (i, j) => { let h = (i * 374761393 + j * 668265263) ^ 0x5bd1e995; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+function noise(x, z) {
+  const i = Math.floor(x), j = Math.floor(z), fx = x - i, fz = z - j;
+  const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+  const a = hash(i, j), b = hash(i + 1, j), c = hash(i, j + 1), d = hash(i + 1, j + 1);
+  return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+}
+function terrain(x, z) {
+  const h = 420 * noise(x / 2400, z / 2400) + 170 * noise(x / 900 + 7, z / 900 + 3) + 60 * noise(x / 350 + 1, z / 350 + 9) + 18 * noise(x / 130, z / 130) - 230;
+  return Math.max(0, h);
+}
+const CELL = 150, VIEW = 3200;
+const vcache = new Map();
+function vert(i, j) {
+  const k = (i + 30000) * 60000 + (j + 30000);
+  let h = vcache.get(k);
+  if (h === undefined) { h = terrain(i * CELL, j * CELL); vcache.set(k, h); }
+  return h;
+}
+const SUN = (() => { const v = [0.45, 0.8, 0.35], n = Math.hypot(...v); return v.map(c => c / n); })();
+const SKY = [127, 184, 240], HAZE = [200, 220, 234];
+const ccache = new Map();
+function cellColor(i, j, h00, h10, h01, h11) {
+  const k = (i + 30000) * 60000 + (j + 30000);
+  let c = ccache.get(k);
+  if (c) return c;
+  const h = (h00 + h10 + h01 + h11) / 4;
+  let base;
+  if (h00 + h10 + h01 + h11 === 0) base = [52, 110, 176];
+  else if (h < 10) base = [205, 190, 140];
+  else if (h < 170) base = hash(i, j) < 0.5 ? [92, 150, 70] : [84, 140, 64];
+  else if (h < 300) base = [52, 104, 52];
+  else if (h < 420) base = [128, 120, 110];
+  else base = [240, 244, 250];
+  // normal from the cell's slopes
+  const nx = (h00 + h01 - h10 - h11) / (2 * CELL), nz = (h00 + h10 - h01 - h11) / (2 * CELL), nl = Math.hypot(nx, 1, nz);
+  const lit = 0.55 + 0.45 * Math.max(0, (nx * SUN[0] + SUN[1] + nz * SUN[2]) / nl);
+  c = base.map(v => v * lit);
+  ccache.set(k, c);
+  return c;
+}
+const rgb = (c, fog) => `rgb(${c.map((v, i) => Math.round(v + (HAZE[i] - v) * fog)).join(',')})`;
+
+// ---------- course: fixed, every ring clear of the hills on the straight line from the one before ----------
+function makeCourse() {
+  let seed = 20261017; const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const pts = [{ x: 0, z: -900 }];
+  let hd = 0, x = 0, z = -900;
+  for (let k = 0; k <= RINGS; ++k) {
+    hd += (rnd() - 0.5) * 100 * D2R;
+    const step = 650 + rnd() * 250;
+    x += Math.sin(hd) * step; z += Math.cos(hd) * step;
+    pts.push({ x, z });
+  }
+  // clearance: highest ground near each point and along each leg
+  const clear = pts.map(p => { let m = 0; for (let a = 0; a < 8; ++a) m = Math.max(m, terrain(p.x + 160 * Math.cos(a), p.z + 160 * Math.sin(a))); return Math.max(m, terrain(p.x, p.z)); });
+  for (let k = 1; k < pts.length; ++k) {
+    const a = pts[k - 1], b = pts[k];
+    let m = 0; for (let t = 0; t <= 1; t += 0.02) m = Math.max(m, terrain(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t));
+    clear[k - 1] = Math.max(clear[k - 1], m); clear[k] = Math.max(clear[k], m);
+  }
+  pts.forEach((p, k) => { p.y = clear[k] + 60 + rnd() * 60; });
+  const rings = [];
+  for (let k = 1; k < pts.length; ++k) {
+    const a = pts[k - 1], b = pts[k], l = Math.hypot(b.x - a.x, b.z - a.z);
+    rings.push({ x: b.x, y: b.y, z: b.z, nx: (b.x - a.x) / l, nz: (b.z - a.z) / l, r: k === pts.length - 1 ? GATE_R : RING_R });
+  }
+  return { start: pts[0], rings };
+}
+const COURSE = makeCourse();
+
+// ---------- game ----------
+const game = { state: 'title', hi: 0, keyboard: false };
+try { game.hi = +localStorage.getItem('mugicFlightHi') || 0; } catch (e) {}
+const keys = {};
+
+function newGame() {
+  const s = COURSE.start, r = COURSE.rings[0];
+  const hd = Math.atan2(r.x - s.x, r.z - s.z);
+  Object.assign(game, {
+    state: 'play', t: 0, next: 0, score: 0, keyboard: false, msg: '', msgT: 0, boost: 0,
+    p: { x: s.x, y: r.y, z: s.z }, hd, pitch: 0, bank: 0, v: 72, throttle: 0.75,
+  });
+}
+function flash(msg, t = 1.5) { game.msg = msg; game.msgT = t; }
+
+function controls() {
+  // the MUGIC is the plane: its bank and pitch are the targets the plane follows
+  let bank = 0, pitch = 0, rudder = 0;
+  if (Mugic.connected) {
+    bank = Mugic.roll * opts.gain;
+    pitch = Mugic.pitch * opts.gain * (opts.invert ? -1 : 1);
+    const y = Mugic.yaw;
+    if (Math.abs(y) > RUDDER_DEAD) rudder = Math.max(-1, Math.min(1, (y - Math.sign(y) * RUDDER_DEAD) / 30));
+  }
+  const kb = (a, b) => (keys[a] ? 1 : 0) - (keys[b] ? 1 : 0);
+  if (keys.ArrowLeft || keys.ArrowRight) { bank = 50 * kb('ArrowRight', 'ArrowLeft'); game.keyboard = true; }
+  if (keys.ArrowUp || keys.ArrowDown) { pitch = 20 * kb('ArrowUp', 'ArrowDown'); game.keyboard = true; }
+  if (keys.KeyA || keys.KeyD) { rudder = kb('KeyD', 'KeyA'); game.keyboard = true; }
+  return { bank: Math.max(-MAX_BANK, Math.min(MAX_BANK, bank)), pitch: Math.max(-MAX_PITCH, Math.min(MAX_PITCH, pitch)), rudder };
+}
+
+function update(dt) {
+  const g = game, c = controls();
+  g.t += dt; g.msgT -= dt; g.boost = Math.max(0, g.boost - dt);
+  g.throttle = Math.max(0.2, Math.min(1, g.throttle + ((keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0)) * 0.5 * dt));
+  if (g.v < STALL) c.pitch = Math.min(c.pitch, -12);   // stalled: the nose drops
+  // attitude follows the targets smoothly, rate limited like a real plane
+  const follow = (cur, tgt, rate) => cur + Math.max(-rate * dt, Math.min(rate * dt, (tgt - cur) * (1 - Math.exp(-dt / 0.25))));
+  g.bank = follow(g.bank, c.bank, 110); g.pitch = follow(g.pitch, c.pitch, 60);
+  // banking turns the plane (coordinated turn, a bit quicker than real), the rudder adds a little yaw
+  g.hd += (1.6 * G * Math.tan(g.bank * D2R) / Math.max(g.v, 20) + c.rudder * RUDDER_RATE * D2R) * dt;
+  const thrust = THRUST * g.throttle * (g.boost > 0 ? BOOST : 1);
+  g.v = Math.min(VMAX, Math.max(15, g.v + (thrust - DRAG * g.v * g.v - G * Math.sin(g.pitch * D2R)) * dt));
+  const prev = { ...g.p }, cp = Math.cos(g.pitch * D2R);
+  g.p.x += Math.sin(g.hd) * cp * g.v * dt; g.p.z += Math.cos(g.hd) * cp * g.v * dt; g.p.y += Math.sin(g.pitch * D2R) * g.v * dt;
+  g.p.y = Math.min(g.p.y, 3000);
+  // through the next ring? (crossed its plane, close enough to its center)
+  const r = COURSE.rings[g.next];
+  const side = q => (q.x - r.x) * r.nx + (q.z - r.z) * r.nz;
+  const s0 = side(prev), s1 = side(g.p);
+  if (s0 < 0 && s1 >= 0) {
+    const f = s0 / (s0 - s1), hx = prev.x + (g.p.x - prev.x) * f - r.x, hy = prev.y + (g.p.y - prev.y) * f - r.y, hz = prev.z + (g.p.z - prev.z) * f - r.z;
+    if (Math.hypot(hx, hy, hz) < r.r) {
+      g.score += 100; ++g.next;
+      if (g.next === COURSE.rings.length) return finish(true);
+      flash(g.next === RINGS ? 'FINISH GATE NEXT!' : `RING ${g.next}/${RINGS}`, 1.2);
+    }
+  }
+  if (g.p.y - terrain(g.p.x, g.p.z) < 3) finish(false);
+}
+
+const ranked = () => !game.keyboard;
+function finish(made) {
+  const g = game;
+  g.state = 'over';
+  if (made) { g.bonus = Math.max(0, Math.round((PAR - g.t) * 10)); g.score += g.bonus; }
+  g.made = made;
+  if (g.score > g.hi) { g.hi = g.score; try { localStorage.setItem('mugicFlightHi', g.hi); } catch (e) {} }
+  if (g.score > 0 && ranked()) Scores.submit({ game: 'flight', score: g.score }).then(showBoard);
+}
+const showBoard = () => Scores.top('flight').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+Mugic.onFlick = () => {
+  if (Scores.busy()) return;
+  if (game.state === 'play') { game.boost = 3; flash('BOOST!', 0.8); }
+  else newGame();
+};
+addEventListener('keydown', e => {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
+  if (Scores.busy()) return;
+  keys[e.code] = true;
+  if ((e.code === 'Space' || e.code === 'Enter') && game.state !== 'play') newGame();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+// ---------- 3D: world -> camera (heading, then pitch, then bank) -> screen ----------
+function view() {
+  const g = game.state === 'title' ? titleCam() : game;
+  const h = g.hd, p = g.pitch * D2R, b = g.bank * D2R;
+  return { x: g.p.x, y: g.p.y, z: g.p.z, ch: Math.cos(h), sh: Math.sin(h), cp: Math.cos(p), sp: Math.sin(p), cb: Math.cos(b), sb: Math.sin(b) };
+}
+function toCam(v, x, y, z) {
+  const dx = x - v.x, dy = y - v.y, dz = z - v.z;
+  const x1 = dx * v.ch - dz * v.sh, z1 = dx * v.sh + dz * v.ch;
+  const y2 = dy * v.cp - z1 * v.sp, z2 = dy * v.sp + z1 * v.cp;
+  return [x1 * v.cb - y2 * v.sb, x1 * v.sb + y2 * v.cb, z2];
+}
+// the camera-space polygon clipped to z > NEAR, projected; null if nothing is left
+function project(poly) {
+  const out = [];
+  for (let i = 0; i < poly.length; ++i) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    if (a[2] > NEAR) out.push(a);
+    if ((a[2] > NEAR) !== (b[2] > NEAR)) { const t = (NEAR - a[2]) / (b[2] - a[2]); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR]); }
+  }
+  return out.length >= 3 ? out.map(q => [CX + q[0] / q[2] * F, CY - q[1] / q[2] * F]) : null;
+}
+const horizonPt = (v, hx, elev) => {   // a screen point at angle `elev` above the horizon, hx px along it (bank applied)
+  const hy = F * Math.tan(elev - Math.asin(v.sp));
+  return [CX + hx * v.cb - hy * v.sb, CY - (hx * v.sb + hy * v.cb)];
+};
+
+function drawWorld() {
+  const v = view();
+  ctx.fillStyle = `rgb(${SKY})`; ctx.fillRect(0, 0, W, H);
+  // haze band and far ground below the horizon
+  const quad = (pts, style) => { ctx.fillStyle = style; ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.fill(); };
+  quad([horizonPt(v, -3000, 0.06), horizonPt(v, 3000, 0.06), horizonPt(v, 3000, 0), horizonPt(v, -3000, 0)], 'rgba(200,220,234,0.7)');
+  const down = ([x, y]) => [x + v.sb * 5000, y + v.cb * 5000];   // straight 'down' on screen from the horizon
+  const hl = horizonPt(v, -3000, 0), hr = horizonPt(v, 3000, 0);
+  quad([hl, hr, down(hr), down(hl)], rgb(HAZE, 0));
+
+  const items = [];
+  const ci = Math.round(v.x / CELL), cj = Math.round(v.z / CELL), n = Math.ceil(VIEW / CELL), tanH = Math.tan(FOV / 2) * 1.25;
+  for (let i = ci - n; i < ci + n; ++i) for (let j = cj - n; j < cj + n; ++j) {
+    const mx = (i + 0.5) * CELL, mz = (j + 0.5) * CELL, dist = Math.hypot(mx - v.x, mz - v.z);
+    if (dist > VIEW) continue;
+    const h00 = vert(i, j), h10 = vert(i + 1, j), h01 = vert(i, j + 1), h11 = vert(i + 1, j + 1);
+    const m = toCam(v, mx, (h00 + h11) / 2, mz);
+    if (m[2] < -CELL) continue;
+    if (m[2] > 0 && Math.abs(m[0]) - CELL > m[2] * tanH) continue;
+    if (m[2] > 0 && Math.abs(m[1]) - CELL - 400 > m[2] * tanH) continue;
+    const poly = project([toCam(v, i * CELL, h00, j * CELL), toCam(v, (i + 1) * CELL, h10, j * CELL),
+                          toCam(v, (i + 1) * CELL, h11, (j + 1) * CELL), toCam(v, i * CELL, h01, (j + 1) * CELL)]);
+    if (!poly) continue;
+    const fog = Math.min(1, Math.pow(dist / VIEW, 1.6));
+    items.push({ d: dist, poly, color: rgb(cellColor(i, j, h00, h10, h01, h11), fog) });
+  }
+  // rings: the next three
+  if (game.state !== 'title') {
+    for (let k = game.next; k < Math.min(COURSE.rings.length, game.next + 3); ++k) {
+      const r = COURSE.rings[k], ux = r.nz, uz = -r.nx, pts = [];
+      for (let a = 0; a < 24; ++a) {
+        const c = Math.cos(a / 24 * 2 * Math.PI), s = Math.sin(a / 24 * 2 * Math.PI);
+        pts.push(toCam(v, r.x + ux * c * r.r, r.y + s * r.r, r.z + uz * c * r.r));
+      }
+      const m = toCam(v, r.x, r.y, r.z);
+      if (m[2] < NEAR) continue;
+      items.push({ d: Math.hypot(r.x - v.x, r.y - v.y, r.z - v.z), ring: pts, w: Math.max(2, 5 * F / m[2]),
+        color: k === COURSE.rings.length - 1 ? '#4dff88' : k === game.next ? '#ffd23f' : 'rgba(255,255,255,0.7)' });
+    }
+  }
+  items.sort((a, b) => b.d - a.d);
+  for (const it of items) {
+    if (it.ring) {
+      // ring: segments in front of the camera only
+      ctx.strokeStyle = it.color; ctx.lineWidth = it.w; ctx.lineCap = 'round'; ctx.beginPath();
+      for (let a = 0; a < it.ring.length; ++a) {
+        const s = project([it.ring[a], it.ring[(a + 1) % it.ring.length], it.ring[a]]);
+        if (s) { ctx.moveTo(...s[0]); ctx.lineTo(...s[1]); }
+      }
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = it.color; ctx.strokeStyle = it.color; ctx.lineWidth = 1;
+      ctx.beginPath(); it.poly.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+  }
+  return v;
+}
+
+// ---------- HUD ----------
+const HUD = '#4dff88';
+function text(s, x, y, align = 'left', size = 14, color = HUD) { ctx.fillStyle = color; ctx.font = `bold ${size}px ui-monospace, Menlo, monospace`; ctx.textAlign = align; ctx.fillText(s, x, y); }
+function drawHud(v) {
+  const g = game;
+  ctx.save(); ctx.strokeStyle = HUD; ctx.lineWidth = 2; ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 3;
+  // pitch ladder (every 10°) and horizon line, turning with the bank
+  ctx.beginPath();
+  ctx.save(); ctx.beginPath(); ctx.rect(CX - 170, CY - 150, 340, 300); ctx.clip();
+  for (let p = -30; p <= 30; p += 10) {
+    const half = p ? 50 : 150, gap = p ? 18 : 30;
+    const a = horizonPt(v, -half, p * D2R), b = horizonPt(v, -gap, p * D2R), c = horizonPt(v, gap, p * D2R), d = horizonPt(v, half, p * D2R);
+    ctx.setLineDash(p < 0 ? [6, 5] : []);
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.moveTo(...c); ctx.lineTo(...d); ctx.stroke();
+    if (p) { ctx.save(); ctx.translate(...horizonPt(v, half + 16, p * D2R)); ctx.rotate(-Math.asin(v.sb)); text(Math.abs(p), 0, 5, 'center', 11); ctx.restore(); }
+  }
+  ctx.restore(); ctx.setLineDash([]);
+  // aircraft symbol
+  ctx.beginPath(); ctx.moveTo(CX - 40, CY); ctx.lineTo(CX - 14, CY); ctx.lineTo(CX - 7, CY + 8); ctx.lineTo(CX, CY);
+  ctx.lineTo(CX + 7, CY + 8); ctx.lineTo(CX + 14, CY); ctx.lineTo(CX + 40, CY); ctx.stroke();
+  ctx.beginPath(); ctx.arc(CX, CY, 3, 0, 2 * Math.PI); ctx.stroke();
+  // bank scale at the top of the ladder
+  ctx.beginPath(); ctx.arc(CX, CY, 130, -Math.PI / 2 - 1.05, -Math.PI / 2 + 1.05); ctx.stroke();
+  for (const a of [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60]) {
+    const t = -Math.PI / 2 + a * D2R, l = a % 30 ? 6 : 11;
+    ctx.beginPath(); ctx.moveTo(CX + Math.cos(t) * 130, CY + Math.sin(t) * 130); ctx.lineTo(CX + Math.cos(t) * (130 - l), CY + Math.sin(t) * (130 - l)); ctx.stroke();
+  }
+  const bt = -Math.PI / 2 - g.bank * D2R;
+  ctx.beginPath(); ctx.moveTo(CX + Math.cos(bt) * 118, CY + Math.sin(bt) * 118);
+  ctx.lineTo(CX + Math.cos(bt + 0.05) * 106, CY + Math.sin(bt + 0.05) * 106); ctx.lineTo(CX + Math.cos(bt - 0.05) * 106, CY + Math.sin(bt - 0.05) * 106); ctx.closePath(); ctx.stroke();
+  // heading tape
+  const hdg = ((g.hd / D2R) % 360 + 360) % 360;
+  ctx.save(); ctx.beginPath(); ctx.rect(CX - 150, 8, 300, 34); ctx.clip();
+  for (let d = Math.floor((hdg - 30) / 5) * 5; d <= hdg + 30; d += 5) {
+    const x = CX + (d - hdg) * 5, dd = (d % 360 + 360) % 360;
+    ctx.beginPath(); ctx.moveTo(x, 28); ctx.lineTo(x, dd % 10 ? 33 : 38); ctx.stroke();
+    if (dd % 30 === 0) text({ 0: 'N', 90: 'E', 180: 'S', 270: 'W' }[dd] || String(dd / 10).padStart(2, '0'), x, 24, 'center', 12);
+  }
+  ctx.restore();
+  ctx.beginPath(); ctx.moveTo(CX, 40); ctx.lineTo(CX - 5, 46); ctx.lineTo(CX + 5, 46); ctx.closePath(); ctx.stroke();
+  // speed (left) and altitude (right) boxes
+  ctx.strokeRect(CX - 250, CY - 13, 76, 26); ctx.strokeRect(CX + 174, CY - 13, 76, 26);
+  text(Math.round(g.v * 1.944) + '', CX - 180, CY + 5, 'right', 15); text('KT', CX - 250, CY - 18, 'left', 11);
+  text(Math.round(g.p.y) + '', CX + 244, CY + 5, 'right', 15); text('ALT M', CX + 174, CY - 18, 'left', 11);
+  text('THR ' + Math.round(g.throttle * 100) + '%' + (g.boost > 0 ? ' +BOOST' : ''), CX - 250, CY + 32, 'left', 11, g.boost > 0 ? '#ffd23f' : HUD);
+  const agl = g.p.y - terrain(g.p.x, g.p.z);
+  if (agl < 60 && g.state === 'play') text('PULL UP', CX, CY + 70, 'center', 18, '#ff5a5a');
+  if (g.v < STALL + 4 && g.state === 'play') text('STALL', CX, CY + 92, 'center', 18, '#ff5a5a');
+  ctx.restore();
+}
+
+function drawGuide(v) {
+  const g = game, r = COURSE.rings[g.next];
+  if (!r) return;
+  const dist = Math.hypot(r.x - g.p.x, r.y - g.p.y, r.z - g.p.z);
+  const m = toCam(v, r.x, r.y, r.z);
+  const sx = CX + m[0] / m[2] * F, sy = CY - m[1] / m[2] * F;
+  if (m[2] > 0 && sx > 30 && sx < W - 30 && sy > 50 && sy < H - 30) {
+    text(Math.round(dist) + ' m', sx, sy - r.r * F / m[2] - 8, 'center', 12, '#ffd23f');
+  } else {
+    // off screen: an arrow at the edge pointing the way to turn
+    let ax = m[0], ay = m[1];
+    if (m[2] <= 0 && Math.hypot(ax, ay) < 1) ax = 1;
+    const a = Math.atan2(-ay, ax), ex = CX + Math.cos(a) * (W / 2 - 50), ey = CY + Math.sin(a) * (H / 2 - 50);
+    ctx.save(); ctx.translate(ex, ey); ctx.rotate(a); ctx.fillStyle = '#ffd23f';
+    ctx.beginPath(); ctx.moveTo(22, 0); ctx.lineTo(-8, -13); ctx.lineTo(-8, 13); ctx.closePath(); ctx.fill(); ctx.restore();
+    text(Math.round(dist) + ' m', ex, ey + 28, 'center', 12, '#ffd23f');
+  }
+  // radar: forward is up, 3 km radius
+  const RX = W - 62, RY = H - 62, RR = 50, S = RR / 3000;
+  ctx.fillStyle = 'rgba(0,20,10,0.55)'; ctx.beginPath(); ctx.arc(RX, RY, RR, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = HUD; ctx.lineWidth = 1; ctx.stroke();
+  for (let k = g.next; k < Math.min(COURSE.rings.length, g.next + 4); ++k) {
+    const q = COURSE.rings[k], dx = q.x - g.p.x, dz = q.z - g.p.z;
+    let rx = (dx * Math.cos(g.hd) - dz * Math.sin(g.hd)) * S, ry = -(dx * Math.sin(g.hd) + dz * Math.cos(g.hd)) * S;
+    const l = Math.hypot(rx, ry); if (l > RR - 3) { rx *= (RR - 3) / l; ry *= (RR - 3) / l; }
+    ctx.fillStyle = k === g.next ? '#ffd23f' : k === COURSE.rings.length - 1 ? '#4dff88' : 'rgba(255,255,255,0.6)';
+    ctx.beginPath(); ctx.arc(RX + rx, RY + ry, k === g.next ? 4 : 3, 0, 2 * Math.PI); ctx.fill();
+  }
+  ctx.fillStyle = HUD; ctx.beginPath(); ctx.moveTo(RX, RY - 6); ctx.lineTo(RX - 4, RY + 4); ctx.lineTo(RX + 4, RY + 4); ctx.closePath(); ctx.fill();
+}
+
+const titleCam = () => { const t = performance.now() / 1000, s = COURSE.start; return { p: { x: s.x + Math.sin(t * 0.05) * 600, y: 480, z: s.z + Math.cos(t * 0.05) * 600 }, hd: t * 0.05 + Math.PI / 2, pitch: -8, bank: 18 }; };
+
+function draw() {
+  const g = game, v = drawWorld();
+  ctx.textBaseline = 'alphabetic';
+  if (g.state === 'title') {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, W, H);
+    text('SKY RINGS', CX, 150, 'center', 44, '#fff');
+    text('hold the MUGIC like a plane: roll banks, nose up climbs', CX, 200, 'center', 15, '#fff');
+    text(`${RINGS} rings + finish gate · 100 each + time bonus`, CX, 226, 'center', 15, '#fff');
+    text('flick or space to take off', CX, 290, 'center', 18, HUD);
+    text('HI ' + g.hi, CX, 330, 'center', 15, '#ffd23f');
+    return;
+  }
+  drawHud(v); drawGuide(v);
+  const m = Math.floor(g.t / 60), s = (g.t % 60).toFixed(1).padStart(4, '0');
+  text(`RING ${Math.min(g.next + 1, RINGS + 1)}/${RINGS + 1}`, 12, 22, 'left', 15, '#fff');
+  text(`TIME ${m}:${s}`, 12, 42, 'left', 15, '#fff');
+  text(`SCORE ${g.score}`, W - 12, 22, 'right', 15, '#fff');
+  text(`HI ${g.hi}`, W - 12, 42, 'right', 15, '#fff');
+  if (g.keyboard) text('KEYBOARD · NOT RANKED', 12, H - 12, 'left', 11, '#ffb0b0');
+  if (g.msgT > 0 && g.state === 'play') text(g.msg, CX, CY - 60, 'center', 24, '#ffd23f');
+  if (g.state === 'over') {
+    ctx.fillStyle = g.made ? 'rgba(0,40,10,0.55)' : 'rgba(80,0,0,0.55)'; ctx.fillRect(0, 0, W, H);
+    text(g.made ? 'FINISH!' : 'CRASHED', CX, 170, 'center', 44, g.made ? HUD : '#ff5a5a');
+    text(g.made ? `${RINGS + 1} rings ${(RINGS + 1) * 100} + time bonus ${g.bonus}` : `rings ${g.next} × 100`, CX, 215, 'center', 16, '#fff');
+    text(`SCORE ${g.score}`, CX, 250, 'center', 22, '#fff');
+    text('flick or space to fly again', CX, 300, 'center', 16, HUD);
+  }
+}
+
+let last = performance.now();
+(function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (game.state === 'play' && !Scores.busy()) update(dt);
+  draw();
+  requestAnimationFrame(loop);
+})(last);
+</script>
+</body>
+</html>
