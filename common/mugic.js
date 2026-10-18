@@ -192,8 +192,12 @@ const Mugic = (() => {
   function status(text, ok) {
     lastStatus = { text, ok };
     if (statusEl) { statusEl.textContent = text; statusEl.classList.toggle('ok', ok); }
-    const btn = hub && statusEl && document.getElementById('mgConnect');
-    if (btn) btn.hidden = m.connected;
+    const btn = document.getElementById('mgConnect');
+    if (btn) {   // red until connected, then green
+      btn.classList.toggle('mg-on', m.connected);
+      btn.textContent = m.connected ? 'MUGIC connected' : 'Connect MUGIC';
+      if (hub && statusEl) btn.hidden = m.connected;
+    }
     each(s => s.status(text, ok, m));
   }
   m.mountStatus = el => { statusEl = el; };
