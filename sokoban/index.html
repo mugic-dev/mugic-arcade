@@ -12,14 +12,15 @@
 <div id="bar"></div>
 <canvas id="game" width="640" height="560"></canvas>
 <div class="mg-bar" style="margin: 8px 0 0">
-  <button id="normalBtn">Normal (1)</button><button id="hardBtn">Hard (2)</button>
+  <button id="normalBtn">Normal (1)</button><button id="hardBtn">Hard (2)</button><button id="freshBtn">Hard from level 1 (3)</button>
   <button id="undoBtn" hidden>Undo (U)</button><button id="restartBtn" hidden>Restart (R)</button><button id="quitBtn" hidden>Quit (Esc)</button>
 </div>
 <div class="scores"><h3 id="boardTitle">GLOBAL TOP 10</h3><div id="board"></div></div>
 <div id="tuning"></div>
 <p class="help">Click Connect, then Calibrate center. Each flick is one step: flick left/right (yaw) or up/down (pitch).
   Undo / Restart are the buttons under the board; any flick goes to the next level once solved.
-  Hard mode: no undo, only restart — and only Hard scores are saved. Tune “Flick at” on the energy
+  Hard mode: no undo, only restart — and only Hard scores are saved. Hard picks up at the first level this browser
+  hasn't solved; a new player can choose “Hard from level 1” (flick down, or 3). Tune “Flick at” on the energy
   meter and “Min turn” (how much the flick must turn to count).
   Quit (Esc) goes back to the mode choice. Keyboard: arrows move, U undo, R restart, N / P next / previous level (Normal only).</p>
 
@@ -302,23 +303,26 @@ $('undoBtn').onclick = undo;
 
 // Mode is chosen once at the start: Hard has no undo and is the only mode whose scores are saved.
 let mode = null, hard = false;
-function chooseMode(m) {
+// Hard resumes at the first level this browser hasn't solved; 'fresh' (a new player) starts Hard at level 1,
+// keeping the saved bests.
+const resumeLevel = () => Math.max(0, LEVELS.findIndex((_, i) => !saved.bestHard[i]));
+function chooseMode(m, fresh = false) {
   mode = m; hard = m === 'hard';
-  $('normalBtn').hidden = $('hardBtn').hidden = true;
+  $('normalBtn').hidden = $('hardBtn').hidden = $('freshBtn').hidden = true;
   $('undoBtn').hidden = hard; $('restartBtn').hidden = $('quitBtn').hidden = false;
-  const firstUnsolved = LEVELS.findIndex((_, i) => !saved.bestHard[i]);
-  loadLevel(hard && firstUnsolved > 0 ? firstUnsolved : 0);
+  loadLevel(hard && !fresh ? resumeLevel() : 0);
 }
 // back to the mode choice; saved Hard bests are kept, the current level is abandoned
 function quit() {
   mode = null; hard = false;
-  $('normalBtn').hidden = $('hardBtn').hidden = false;
+  $('normalBtn').hidden = $('hardBtn').hidden = $('freshBtn').hidden = false;
   $('undoBtn').hidden = $('restartBtn').hidden = $('quitBtn').hidden = true;
   loadLevel(0);
 }
 $('quitBtn').onclick = quit;
 $('normalBtn').onclick = () => chooseMode('normal');
 $('hardBtn').onclick = () => chooseMode('hard');
+$('freshBtn').onclick = () => chooseMode('hard', true);
 $('restartBtn').onclick = () => loadLevel(game.n);
 
 // global board: Hard-mode fewest moves for the current level
@@ -335,7 +339,11 @@ function next() { if (game.n + 1 < LEVELS.length) loadLevel(game.n + 1); else ga
 // A flick's direction is the axis that turned most during it: yaw -> left/right, pitch -> up/down.
 Mugic.onFlickDir = d => {
   if (Scores.busy()) return;
-  if (!mode) { if (Math.abs(d.yaw) >= saved.minTurn) chooseMode(d.yaw < 0 ? 'normal' : 'hard'); return; }
+  if (!mode) {
+    if (Math.abs(d.yaw) >= saved.minTurn && Math.abs(d.yaw) >= Math.abs(d.pitch)) chooseMode(d.yaw < 0 ? 'normal' : 'hard');
+    else if (d.pitch <= -saved.minTurn) chooseMode('hard', true);
+    return;
+  }
   if (game.state === 'won') { next(); return; }
   if (game.state !== 'play') return;
   const [axis, v] = [['yaw', d.yaw], ['pitch', d.pitch]].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
@@ -352,6 +360,7 @@ addEventListener('keydown', e => {
   if (!mode) {
     if (e.code === 'Digit1') chooseMode('normal');
     else if (e.code === 'Digit2') chooseMode('hard');
+    else if (e.code === 'Digit3') chooseMode('hard', true);
     return;
   }
   const k = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
@@ -411,13 +420,14 @@ function draw() {
   drawTilt(CW - 30, 22);
 
   if (!mode) {
-    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0, CH / 2 - 80, CW, 160);
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(0, CH / 2 - 80, CW, 190);
     ctx.textAlign = 'center'; ctx.fillStyle = '#4dff88'; ctx.font = '28px ui-monospace, Menlo, monospace';
     ctx.fillText('CHOOSE MODE', CW / 2, CH / 2 - 35);
     ctx.fillStyle = '#fff'; ctx.font = '16px ui-monospace, Menlo, monospace';
     ctx.fillText('← flick left / 1 : NORMAL — undo allowed', CW / 2, CH / 2 + 5);
     ctx.fillStyle = '#ff5a5a';
-    ctx.fillText('flick right / 2 : HARD — no undo, scores saved →', CW / 2, CH / 2 + 35);
+    ctx.fillText(`flick right / 2 : HARD from level ${resumeLevel() + 1} — no undo, scores saved →`, CW / 2, CH / 2 + 35);
+    ctx.fillText('↓ flick down / 3 : HARD from level 1 (new player)', CW / 2, CH / 2 + 65);
   } else if (game.state !== 'play') {
     ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fillRect(0, CH / 2 - 50, CW, 100);
     ctx.textAlign = 'center'; ctx.fillStyle = '#4dff88'; ctx.font = '30px ui-monospace, Menlo, monospace';
