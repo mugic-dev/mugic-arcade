@@ -266,17 +266,17 @@ function loadLevel(n) {
 
 const DIRS = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
 
-function move(dir) {
-  if (game.state !== 'play') return;
+function move(dir) {   // true if the player moved
+  if (game.state !== 'play') return false;
   const [dx, dy] = DIRS[dir];
   const x = game.player % game.W, y = Math.floor(game.player / game.W);
   const step = (cx, cy) => (cx < 0 || cy < 0 || cx >= game.W || cy >= game.H) ? -1 : cy * game.W + cx;
   const t = step(x + dx, y + dy);
-  if (t < 0 || game.walls.has(t)) return;
+  if (t < 0 || game.walls.has(t)) return false;
   let pushed = null;
   if (game.boxes.has(t)) {
     const t2 = step(x + 2 * dx, y + 2 * dy);
-    if (t2 < 0 || game.walls.has(t2) || game.boxes.has(t2)) return;
+    if (t2 < 0 || game.walls.has(t2) || game.boxes.has(t2)) return false;
     game.boxes.delete(t); game.boxes.add(t2); pushed = [t, t2]; ++game.pushes;
   }
   game.history.push({ player: game.player, pushed });
@@ -288,6 +288,7 @@ function move(dir) {
     if (hard && (!best || game.moves < best)) { saved.bestHard[game.n] = game.moves; save(); }
     if (hard) Scores.submit({ game: 'sokoban', mode: 'hard', level: game.n + 1, score: game.moves }).then(showBoard);
   }
+  return true;
 }
 
 function undo() {
@@ -346,12 +347,18 @@ Mugic.onFlickDir = d => {
   }
   if (game.state === 'won') { next(); return; }
   if (game.state !== 'play') return;
-  const [axis, v] = [['yaw', d.yaw], ['pitch', d.pitch]].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
-  if (Math.abs(v) < saved.minTurn) return;
+  const [[axis, v], [, w]] = [['yaw', d.yaw], ['pitch', d.pitch]].sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+  const reading = `${axis} ${v > 0 ? '+' : ''}${v.toFixed(0)}°`;
+  // big enough: the minimum turn, or half of it when one axis clearly dominates
+  if (Math.abs(v) < saved.minTurn && !(Math.abs(v) >= saved.minTurn / 2 && Math.abs(v) >= 2 * Math.abs(w))) {
+    feedback(`too small: ${reading}`, '#ff5a5a'); return;
+  }
   // the snap back to center after a flick is a jolt the other way: ignore it
   const now = performance.now(), last = game.lastFlick;
-  if (last && last.axis === axis && Math.sign(last.v) !== Math.sign(v) && now - last.t < 600) return;
-  move(axis === 'yaw' ? (v > 0 ? 'right' : 'left') : (v > 0 ? 'up' : 'down'));
+  if (last && last.axis === axis && Math.sign(last.v) !== Math.sign(v) && now - last.t < 350) { feedback(`snap-back ignored: ${reading}`, '#ff5a5a'); return; }
+  const dir = axis === 'yaw' ? (v > 0 ? 'right' : 'left') : (v > 0 ? 'up' : 'down');
+  const arrow = { right: '→', left: '←', up: '↑', down: '↓' }[dir];
+  if (move(dir)) feedback(`${arrow} ${reading}`, '#4dff88'); else feedback(`${arrow} blocked · ${reading}`, '#ffb03b');
   game.lastFlick = { axis, v, t: now };
 };
 
@@ -439,11 +446,15 @@ function draw() {
 }
 
 // last flick: which axis won and by how much, to help tune Min turn / axes
+// what the last flick did: moved (green), blocked (orange) or ignored and why (red); fades after 2 s
+let flickNote = null;
+function feedback(text, color) { flickNote = { text, color, t: performance.now() }; }
 function drawTilt(x, y) {
-  const f = game.lastFlick;
-  if (!Mugic.connected || !f) return;
-  ctx.fillStyle = '#7a8499'; ctx.font = '12px ui-monospace, Menlo, monospace'; ctx.textAlign = 'right';
-  ctx.fillText(`${f.axis} ${f.v > 0 ? '+' : ''}${f.v.toFixed(0)}°`, x + 26, y + 16);
+  if (!flickNote) return;
+  const age = (performance.now() - flickNote.t) / 2000;
+  if (age > 1) return;
+  ctx.globalAlpha = 1 - age * age; ctx.fillStyle = flickNote.color; ctx.font = 'bold 13px ui-monospace, Menlo, monospace'; ctx.textAlign = 'right';
+  ctx.fillText(flickNote.text, x + 26, y + 18); ctx.globalAlpha = 1;
 }
 
 loadLevel(0);
