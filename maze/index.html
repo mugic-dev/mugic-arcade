@@ -24,7 +24,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const STORE = 'mugicMaze';
-const opts = { range: 20 };
+const opts = { range: 30 };
 try { Object.assign(opts, JSON.parse(localStorage.getItem(STORE) || '{}')); } catch (e) {}
 const saveOpts = () => { try { localStorage.setItem(STORE, JSON.stringify(opts)); } catch (e) {} };
 Mugic.mountPanel($('bar'), $('tuning'), {
@@ -37,7 +37,7 @@ $('range').oninput = e => { opts.range = +e.target.value; $('rangeVal').textCont
 
 const cv = $('game'), ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height, TOP = 32, BW = W - 16, BH = H - TOP - 8;   // board area
-const TILT_G = 1100, DAMP = 0.6, BOUNCE = 0.35, VMAX = 750, BALL = 9;
+const TILT_G = 800, BOUNCE = 0.35, VMAX = 750, BALL = 9;
 const SIZES = [[6, 4], [7, 5], [8, 5], [9, 6], [10, 6], [10, 7], [11, 7], [12, 8]];
 
 // ---------- levels: a perfect maze (fixed seed per level), holes in dead ends and beside the straight runs ----------
@@ -84,6 +84,8 @@ function makeLevel(n) {
   return { cols, rows, s, t, walls, holes, route: route.map(center), start: center(0), goal: [...center(goalC), hr + 3], par: Math.round(10 + cols * rows * 0.55) };
 }
 const LEVELS = SIZES.map((_, i) => makeLevel(i));
+// friction (1/s): grippy on level 1, slicker on each level after
+const dampAt = n => 3.2 - 2 * n / Math.max(1, LEVELS.length - 1);
 
 const game = { state: 'title', hi: 0, keyboard: false };
 try { game.hi = +localStorage.getItem('mugicMazeHi') || 0; } catch (e) {}
@@ -99,8 +101,10 @@ function startLevel() {
 function readTilt(dt) {
   let tx = 0, ty = 0;
   if (Mugic.connected) {
-    tx = Math.max(-1, Math.min(1, Mugic.roll / opts.range));
-    ty = Math.max(-1, Math.min(1, Mugic.pitch / opts.range));   // tip forward (pitch < 0): the far edge drops, the ball rolls up
+    // 3° dead zone, then a curve that's gentle near level: a few degrees nudge the ball, not fling it
+    const shape = a => { const m = Math.min(1, Math.max(0, Math.abs(a) - 3) / (opts.range - 3)); return Math.sign(a) * m ** 1.5; };
+    tx = shape(Mugic.roll);
+    ty = shape(Mugic.pitch);   // tip forward (pitch < 0): the far edge drops, the ball rolls up
   }
   if (keys.ArrowLeft || keys.ArrowRight || keys.ArrowUp || keys.ArrowDown) {
     tx = (keys.ArrowRight ? 0.6 : 0) - (keys.ArrowLeft ? 0.6 : 0); ty = (keys.ArrowUp ? -0.6 : 0) + (keys.ArrowDown ? 0.6 : 0);
@@ -127,9 +131,9 @@ function update(dt) {
     }
     return;
   }
-  const N = 4, h = dt / N;
+  const N = 4, h = dt / N, damp = dampAt(g.level);
   for (let i = 0; i < N; ++i) {
-    b.vx += (tilt.x * TILT_G - DAMP * b.vx) * h; b.vy += (tilt.y * TILT_G - DAMP * b.vy) * h;
+    b.vx += (tilt.x * TILT_G - damp * b.vx) * h; b.vy += (tilt.y * TILT_G - damp * b.vy) * h;
     const sp = Math.hypot(b.vx, b.vy); if (sp > VMAX) { b.vx *= VMAX / sp; b.vy *= VMAX / sp; }
     b.x += b.vx * h; b.y += b.vy * h;
     for (const [x, y, w, hh] of L.walls) {
