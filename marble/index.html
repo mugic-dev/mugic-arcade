@@ -42,34 +42,46 @@ const TW = 44, TH = 22, HZ = 14;   // iso tile size and height unit (px)
 
 // Courses: one row per y (going down the screen), one char per x. '0'-'9' flat at that height, ' ' void,
 // 'a'-'j' ramp falling toward +y from 1-10 to one less, 'A'-'J' ramp falling toward +x. Rows from `goal` on are the finish.
-// Corridors are at least 5 tiles wide on Practice and Beginner, 3 on Intermediate;
-// there's a checkpoint after every ramp and drop.
+// Built from legs [x0, width, length, join]: each leg runs down the screen; `join` to the next leg is 'r' (ramp down one),
+// 'd' (drop two) or 'f' (level). When the next leg is offset, a connector `cw` rows tall spans both, so every bend needs a
+// turn. A checkpoint sits on the first row of each leg. Slinkies: [leg, 'm' (middle row) | 'c' (its connector), speed];
+// put them only where the path is 3+ wide across their patrol, so there's a gap to time.
+function course({ name, time, cw, legs, slinkies = [] }) {
+  let h = legs.reduce((n, l) => n + ({ r: 1, d: 2 }[l[3]] || 0), 0);
+  const rows = [], checkpoints = [], enemies = [], at = [];
+  const row = (x0, x1, ch) => rows.push(' '.repeat(x0) + ch.repeat(x1 - x0 + 1) + ' '.repeat(11 - x1));
+  legs.forEach(([x0, w, len, join], k) => {
+    checkpoints.push(rows.length);
+    at[k] = { m: rows.length + (len >> 1), x0, x1: x0 + w - 1 };
+    for (let n = 0; n < len; ++n) row(x0, x0 + w - 1, '' + h);
+    const next = legs[k + 1]; if (!next) return;
+    const [nx0, nw] = next, inside = nx0 >= x0 && nx0 + nw <= x0 + w;
+    if (!inside) { at[k].c = { y: rows.length, x0: Math.min(x0, nx0), x1: Math.max(x0 + w, nx0 + nw) - 1 }; for (let n = 0; n < cw; ++n) row(at[k].c.x0, at[k].c.x1, '' + h); }
+    if (join === 'r') row(nx0, nx0 + nw - 1, String.fromCharCode(96 + h--));
+    else if (join === 'd') h -= 2;
+  });
+  for (const [k, where, speed] of slinkies) {
+    const s = where === 'c' ? at[k].c : { y: at[k].m, x0: at[k].x0, x1: at[k].x1 };
+    enemies.push({ y: where === 'c' ? s.y + (cw >> 1) : s.y, x0: s.x0, x1: s.x1, speed });
+  }
+  return { name, time, rows, checkpoints, enemies, start: [legs[0][0] + (legs[0][1] >> 1), 1], goal: rows.length - 3 };
+}
 const COURSES = [
-  { name: 'PRACTICE RACE', time: 60, start: [5, 2], checkpoints: [0, 5, 8, 9, 13, 14, 17, 20, 21, 23, 25, 27, 29, 30, 33, 34, 36], enemies: [], rows: [
-    '   999999   ', '   999999   ', '   999999   ', '   999999   ', '   iiiiii   ', '   888888   ', '   888888   ', '   hhhhhh   ',
-    '   777777   ', '    777777  ', '     777777 ', '     777777 ', '     gggggg ', '     666666 ', '    666666  ', '   666666   ',
-    '  666666    ', '  666666    ', '  666666    ', '  ffffff    ', '  5555555555', '  5555555555', '     5555555', '     5555555',
-    '     eeeeee ', '     444444 ', '   44444444 ', '  44444444  ', '  dddddd    ', '  333333    ', '  3333333333', '  3333333333',
-    '      cccccc', '      222222', '  2222222222', '  bbbbbbbbbb', '  1111111111', '  aaaaaaaaaa', '  0000000000', '  0000000000',
-    '  0000000000'],
-    goal: 38 },
-  { name: 'BEGINNER RACE', time: 55, start: [3, 1], checkpoints: [0, 7, 8, 12, 14, 17, 18, 22, 24, 26, 30, 31, 34, 36], enemies: [], rows: [
-    ' 99999      ', ' 99999      ', ' 9999999999 ', ' 9999999999 ', '      99999 ', '      99999 ', '      iiiii ', '      88888 ',
-    '      88888 ', '  888888888 ', '  88888     ', '  88888     ', '  88888     ', '  hhhhh     ', '  777777777 ', '  777777777 ',
-    '      77777 ', '      77777 ', '      55555 ', '      55555 ', '   55555555 ', '   55555    ', '   55555    ', '   eeeee    ',
-    '   44444    ', '   444444444', '   444444444', '       44444', '       44444', '       ddddd', '   333333333', '   333333333',
-    '   33333    ', '   ccccc    ', '   222222222', '   bbbbbbbbb', '   111111111', '   aaaaaaaaa', '   000000000', '   000000000',
-    '   000000000'],
-    goal: 38 },
-  { name: 'INTERMEDIATE RACE', time: 55, start: [8, 1], checkpoints: [0, 3, 6, 8, 11, 15, 17, 20, 22, 25, 27, 29, 32, 34, 36],
-    enemies: [{ y: 9, x0: 2, x1: 8, speed: 2.2 }, { y: 20, x0: 1, x1: 9, speed: 2.6 }, { y: 30, x0: 2, x1: 9, speed: 3 }], rows: [
-    '      99999 ', '      99999 ', '      iiiii ', '      88888 ', '  888888888 ', '  888       ', '  888       ', '  hhh       ',
-    '  77777777  ', '  77777777  ', '  77777777  ', '      777   ', '      777   ', '      777   ', '      ggg   ', '      666   ',
-    '   66666666 ', '   666      ', '   666      ', '   fff      ', ' 5555555555 ', ' 5555555555 ', '        555 ', '        555 ',
-    '        eee ', '        444 ', '    4444444 ', '    444     ', '    ddd     ', '  3333333   ', ' 3333333333 ', ' 3333333333 ',
-    '       3333 ', '       cccc ', '  22222222  ', '  bbbbbbbb  ', '  11111111  ', '  aaaaaaaa  ', '  00000000  ', '  00000000  ',
-    '  00000000  '],
-    goal: 38 },
+  course({ name: 'PRACTICE RACE', time: 45, cw: 4, legs: [[0, 6, 4, 'r'], [6, 6, 4, 'r'], [0, 6, 4, 'r'], [6, 6, 4, 'r'], [0, 6, 4, 'r'], [3, 6, 6]] }),
+  course({ name: 'BEGINNER RACE', time: 55, cw: 4,
+    legs: [[1, 4, 4, 'r'], [7, 4, 4, 'r'], [2, 4, 3, 'd'], [7, 4, 4, 'r'], [0, 4, 4, 'r'], [5, 4, 3, 'r'], [0, 4, 3, 'r'], [6, 5, 5]] }),
+  course({ name: 'INTERMEDIATE RACE', time: 50, cw: 3,
+    legs: [[1, 3, 4, 'r'], [7, 3, 4, 'r'], [2, 3, 3, 'd'], [8, 3, 4, 'f'], [9, 2, 3, 'r'], [3, 3, 4, 'r'], [7, 3, 3, 'd'], [1, 4, 5]],
+    slinkies: [[1, 'm', 1.6], [5, 'm', 2]] }),
+  course({ name: 'ADVANCED RACE', time: 50, cw: 2,
+    legs: [[8, 3, 3, 'r'], [1, 3, 4, 'f'], [2, 1, 3, 'r'], [6, 3, 3, 'd'], [9, 2, 4, 'r'], [3, 2, 3, 'f'], [0, 2, 3, 'r'], [6, 3, 3, 'd'], [1, 4, 5]],
+    slinkies: [[1, 'm', 2], [3, 'm', 2.2], [7, 'm', 2.6]] }),
+  course({ name: 'EXPERT RACE', time: 45, cw: 2,
+    legs: [[1, 2, 3, 'r'], [8, 2, 3, 'f'], [8, 1, 4, 'r'], [3, 3, 3, 'd'], [9, 2, 3, 'f'], [10, 1, 3, 'r'], [2, 3, 3, 'r'], [7, 2, 3, 'f'], [7, 1, 3, 'd'], [2, 3, 5]],
+    slinkies: [[3, 'm', 2.4], [6, 'm', 2.6], [9, 'm', 2.8]] }),
+  course({ name: 'IMPOSSIBLE RACE', time: 45, cw: 1,
+    legs: [[5, 2, 3, 'r'], [10, 1, 4, 'r'], [1, 1, 4, 'f'], [6, 3, 3, 'f'], [7, 1, 4, 'r'], [2, 1, 3, 'r'], [9, 1, 4, 'd'], [4, 1, 3, 'r'], [0, 3, 3, 'r'], [6, 3, 5]],
+    slinkies: [[3, 'm', 3], [8, 'm', 3.2], [9, 'm', 3.4]] }),
 ];
 function tileAt(c, x, y) { const i = Math.floor(x), j = Math.floor(y); return (c.rows[j] || '')[i] || ' '; }
 function surf(c, x, y) {   // surface height at a point, -Infinity over the void
@@ -193,7 +205,8 @@ addEventListener('keyup', e => { keys[e.code] = false; });
 // ---------- isometric drawing ----------
 const cam = { x: 0, y: 0 };
 const iso = (x, y, z) => [W / 2 + (x - y) * TW / 2 - cam.x, H * 0.38 + (x + y) * TH / 2 - z * HZ - cam.y];
-const THEMES = [['#6fd0ff', '#4fb0e8', '#2c7fb8', '#1d5e8a'], ['#ffd36b', '#f0b94a', '#c48a28', '#8f6219'], ['#c79bff', '#a77ce8', '#7650b8', '#53368a']];
+const THEMES = [['#6fd0ff', '#4fb0e8', '#2c7fb8', '#1d5e8a'], ['#9ff07a', '#7fd65a', '#4f9e34', '#356e22'], ['#ffd36b', '#f0b94a', '#c48a28', '#8f6219'],
+  ['#ff9f6b', '#e8804a', '#b8582c', '#8a3d1d'], ['#c79bff', '#a77ce8', '#7650b8', '#53368a'], ['#c8d2e0', '#a8b4c6', '#6e7c92', '#4a566a']];
 function text(s, x, y, align = 'center', size = 16, color = '#fff') { ctx.fillStyle = color; ctx.font = `bold ${size}px ui-monospace, Menlo, monospace`; ctx.textAlign = align; ctx.fillText(s, x, y); }
 function poly(pts, fill, stroke) { ctx.fillStyle = fill; ctx.beginPath(); pts.forEach(([x, y], k) => k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.fill(); if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); } }
 function cornerH(c, i, j, t) {   // heights at the tile's corners: (i,j) (i+1,j) (i+1,j+1) (i,j+1)
@@ -259,7 +272,7 @@ function draw() {
     ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, 0, W, H);
     text('MARBLE RUSH', W / 2, 160, 'center', 46, '#ff6b6b');
     text('tilt the MUGIC to race the marble down the course', W / 2, 208, 'center', 15);
-    text('3 races · beat the clock · mind the edges', W / 2, 234, 'center', 15);
+    text('6 races · beat the clock · mind the edges', W / 2, 234, 'center', 15);
     text('flick or space to start', W / 2, 300, 'center', 18, '#4dff88');
     text('HI ' + g.hi, W / 2, 340, 'center', 15, '#ffd23f');
     return;
