@@ -15,6 +15,7 @@
 <div id="tuning"></div>
 <p class="help">Steer the tongue's tip through the anthill: roll right/left, pitch up/down, the further you tilt the faster it
   goes. Tilt a little toward a shaft or side tunnel while moving and the tip turns into it at the next opening.
+  Once it has turned, you can ease off: the tilt you were still holding toward the old way only sets the speed.
   Steering back along the tongue pulls it in; a flick snaps it all the way back. Eat every larva before the night is
   over. Ants keep to their tunnel and walk in from the edge and back out, some reaching far across. Only the tip eats: an ant touching the
   tongue anywhere else bites. Eat worms from behind, never head-on.
@@ -75,7 +76,7 @@ const NIGHT = 30;
 
 function newDay() {
   game.tongue = [ENTRANCE.slice()];
-  game.stepAcc = 0; game.retracting = false;
+  game.stepAcc = 0; game.retracting = false; game.held = null;
   game.ants = []; game.worms = []; game.spider = null;
   game.clock = 0; game.calm = 0; game.spawnAnt = 1; game.spawnWorm = 6;
   game.state = 'ready'; game.timer = 1.5;
@@ -89,18 +90,26 @@ const antSpeed = () => 2.2 + 0.25 * Math.min(game.level - 1, 8) + (night() ? 0.8
 // Held arrow keys override the MUGIC (and keep that game off the global board).
 // MUGIC: the dominant of roll/pitch picks the direction, with hysteresis so a diagonal tilt doesn't flicker.
 // The other axis, when tilted at least TURN_MIN degrees, asks for a turn: taken at the next opening.
+// After a turn, leftover tilt toward the way the tip came from (`held`) only sets the speed, so easing
+// off the turn's tilt keeps the tip going the new way instead of back toward the old one.
 const SWITCH_RATIO = 1.4, TURN_MIN = 5;
 let stickAxis = 'roll';
-function stick() {
+function stick(moving, held) {
   if (keys.dir) { game.keyboard = true; return { dir: keys.dir, speed: 1 }; }
   if (!Mugic.connected) return null;
-  const r = Mugic.roll, p = Mugic.pitch, mag = Math.max(Math.abs(r), Math.abs(p));
+  const mag = Math.max(Math.abs(Mugic.roll), Math.abs(Mugic.pitch));
   if (mag < DEADZONE) return null;
+  const speed = Math.min(1, mag / range);
+  const tilt = {
+    roll: held && held[0] && Math.sign(Mugic.roll) === held[0] ? 0 : Mugic.roll,
+    pitch: held && held[1] && Math.sign(Mugic.pitch) === -held[1] ? 0 : Mugic.pitch,
+  };
+  if (Math.max(Math.abs(tilt.roll), Math.abs(tilt.pitch)) < DEADZONE) return moving ? { dir: moving, alt: null, speed } : null;
   const other = stickAxis === 'roll' ? 'pitch' : 'roll';
-  if (Math.abs(Mugic[other]) > SWITCH_RATIO * Math.abs(Mugic[stickAxis])) stickAxis = other;
+  if (Math.abs(tilt[other]) > SWITCH_RATIO * Math.abs(tilt[stickAxis])) stickAxis = other;
   const toDir = (axis, v) => axis === 'roll' ? (v > 0 ? DIRS.right : DIRS.left) : (v > 0 ? DIRS.up : DIRS.down);
-  const v = Mugic[stickAxis], w = Mugic[other];
-  return { dir: toDir(stickAxis, v), alt: Math.abs(w) >= TURN_MIN ? toDir(other, w) : null, speed: Math.min(1, Math.abs(v) / range) };
+  const v = tilt[stickAxis], w = tilt[other];
+  return { dir: toDir(stickAxis, v), alt: Math.abs(w) >= TURN_MIN ? toDir(other, w) : null, speed };
 }
 
 function die() { game.state = 'bitten'; game.timer = 1.5; }
@@ -134,11 +143,23 @@ function updateTongue(dt) {
     return;
   }
   game.retracting = false;
-  const s = stick();
-  if (!s) { game.stepAcc = 0; game.request = null; return; }
+  const was = heading(), held = game.held;
+  if (held && (!was || (held[0] ? Mugic.roll * held[0] : -Mugic.pitch * held[1]) < TURN_MIN)) game.held = null;
+  const s = stick(was, game.held);
+  if (!s) { game.stepAcc = 0; game.request = null; game.held = null; return; }
   game.stepAcc += s.speed * EXTEND_SPEED * dt;
   game.request = s.alt;
+  const n = game.tongue.length;
   while (game.stepAcc >= 1) { stepTongue(s.dir, s.alt); --game.stepAcc; }
+  const now = heading();   // a turn just taken: hold the tilt toward the old way
+  if (game.tongue.length < n) game.held = null;
+  else if (game.tongue.length > n && was && now && was[0] !== now[0] && was[1] !== now[1]) game.held = was;
+}
+
+// the way the tip last moved: from the segment before it
+function heading() {
+  const t = game.tongue, n = t.length;
+  return n > 1 ? [t[n - 1][0] - t[n - 2][0], t[n - 1][1] - t[n - 2][1]] : null;
 }
 
 // Whatever the tip lands on: ants and the queen are eaten, worms only from behind.
