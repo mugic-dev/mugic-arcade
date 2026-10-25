@@ -15,7 +15,7 @@
 <div id="tuning"></div>
 <p class="help">Connect, hold the MUGIC level and click Calibrate center. It steers like a joystick: roll right/left or
   pitch up/down, and the further you tilt, the faster you go (level = stop). A turn you ask for early is taken at the
-  next opening. Flick or Enter to start. Keyboard: arrows.</p>
+  next opening; a small sideways tilt is enough to ask for it, and one asked just past an opening still takes it. Flick or Enter to start. Keyboard: arrows.</p>
 
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
@@ -23,6 +23,8 @@
 <script>
 const $ = id => document.getElementById(id);
 const SPEED_DEADZONE = 2;              // degrees of tilt that still count as center
+const TURN_AT = 6;                     // degrees of sideways tilt that ask for a turn, even while tilting harder ahead
+const GRACE = 0.35;                    // tiles past an opening where a late turn is still taken
 let range = 15;
 try { range = +localStorage.getItem('mugicMuncherRange') || 15; } catch (e) {}
 Mugic.mountPanel($('bar'), $('tuning'), {
@@ -128,25 +130,39 @@ const ghostSpeed = g => g.state === 'eyes' ? 13 : g.frightened ? 3.6 : (6.6 + 0.
 const chasing = () => game.modeIdx % 2 === 1;
 
 // Joystick from the MUGIC: the dominant of roll/pitch picks the direction, its size the speed.
-function stick() {
+// While moving, a sideways tilt past TURN_AT asks for that turn even if the tilt ahead is bigger.
+// After a turn the axis you came from (`held`: 0 roll, 1 pitch) only sets the speed until you level it.
+function stick(moving, held) {
   if (!Mugic.connected) return keys.wanted ? { dir: keys.wanted, speed: 1 } : null;
-  const r = Mugic.roll, p = Mugic.pitch, mag = Math.max(Math.abs(r), Math.abs(p));
+  const mag = Math.max(Math.abs(Mugic.roll), Math.abs(Mugic.pitch));
   if (mag < SPEED_DEADZONE) return { dir: null, speed: 0 };
-  const dir = Math.abs(r) >= Math.abs(p) ? (r > 0 ? DIRS.right : DIRS.left) : (p > 0 ? DIRS.up : DIRS.down);
-  return { dir, speed: Math.min(1, mag / range) };
+  const r = held === 0 ? 0 : Mugic.roll, p = held === 1 ? 0 : Mugic.pitch, speed = Math.min(1, mag / range);
+  if (Math.max(Math.abs(r), Math.abs(p)) < SPEED_DEADZONE) return { dir: moving, speed };
+  const byRoll = d => d > 0 ? DIRS.right : DIRS.left, byPitch = d => d > 0 ? DIRS.up : DIRS.down;
+  let dir = Math.abs(r) >= Math.abs(p) ? byRoll(r) : byPitch(p);
+  const side = moving ? (moving[0] ? p : r) : 0;
+  if (Math.abs(side) >= TURN_AT && !opposite(dir, moving)) dir = moving[0] ? byPitch(p) : byRoll(r);
+  return { dir, speed };
 }
 
 function updatePac(dt) {
-  const pac = game.pac, s = stick();
+  const pac = game.pac;
+  if (pac.held !== undefined && Math.abs(pac.held ? Mugic.pitch : Mugic.roll) < TURN_AT) delete pac.held;
+  const s = stick(pac.dir, pac.held);
   if (s && s.dir) pac.wanted = s.dir;
   const speed = s ? s.speed * pacMax() : 0;
   if (opposite(pac.wanted, pac.dir)) pac.dir = pac.wanted;   // reversing is allowed mid-corridor
-  const before = [pac.x, pac.y];
+  else if (pac.dir && pac.wanted && !same(pac.wanted, pac.dir)) {   // a turn asked just past an opening: back up and take it
+    const cx = Math.round(pac.x), cy = Math.round(pac.y), past = (pac.x - cx) * pac.dir[0] + (pac.y - cy) * pac.dir[1];
+    if (past > 0 && past < GRACE && isPath(cell(cx + pac.wanted[0], cy + pac.wanted[1]))) { pac.x = cx; pac.y = cy; }
+  }
+  const before = [pac.x, pac.y], was = pac.dir;
   advance(pac, speed * dt, e => {
     const open = d => d && isPath(cell(e.x + d[0], e.y + d[1]));
     if (open(e.wanted)) return e.wanted;
     return open(e.dir) ? e.dir : null;
   });
+  if (was && pac.dir && !same(was, pac.dir) && !opposite(was, pac.dir)) pac.held = was[0] ? 0 : 1;
   if (pac.dir) pac.face = pac.dir;
   if (pac.x !== before[0] || pac.y !== before[1]) pac.mouth += dt * 14;
 
