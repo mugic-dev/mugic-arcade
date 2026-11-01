@@ -124,7 +124,7 @@ function finish() {
   const g = game, cs = Math.round(raceTime() * 100);
   g.state = 'over'; g.final = cs;
   if (!g.best || cs < g.best) { g.best = cs; try { localStorage.setItem('mugicSlalomBest', cs); } catch (e) {} }
-  if (ranked()) Scores.submit({ game: 'slalom', score: cs }).then(showBoard);
+  if (ranked()) Scores.submit({ game: 'slalom', score: cs, lowerIsBetter: true }).then(showBoard);
 }
 const showBoard = () => Scores.top('slalom', { lowerIsBetter: true }).then(rows => Scores.render($('board'), rows, Scores.time));
 showBoard();
