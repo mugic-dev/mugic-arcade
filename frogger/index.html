@@ -22,6 +22,7 @@
 <script src="../common/scores.js"></script>
 <script>
 const $ = id => document.getElementById(id);
+Mugic.flickScale = 0.75;   // a bit lighter flick than the other games: hops should feel quick
 let minTurn = 6;
 try { minTurn = +localStorage.getItem('mugicHopperTurn') || 6; } catch (e) {}
 Mugic.mountPanel($('bar'), $('tuning'), {
