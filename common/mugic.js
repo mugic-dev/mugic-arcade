@@ -2,7 +2,8 @@
 // OSC parsing, calibration, and a control panel with live meters.
 //   Mugic.roll / .pitch / .yaw  degrees from the calibrated pose
 //   Mugic.energy                |acc|^2 minus the at-rest baseline
-//   Mugic.onFlick               called once per energy spike above settings.thresh
+//   Mugic.onFlick               called once per energy spike above settings.thresh × flickScale
+//   Mugic.flickScale            per-game multiplier on the shared flick threshold (default 1)
 //   Mugic.onFlickDir(d)         called ~150 ms after a flick with d = {roll, pitch, yaw}: the largest angle
 //                               change (degrees, signed) over the flick window, to tell which way it went
 //   Mugic.trigger(on)           hysteresis + cooldown edge detector (same as the flick) for game inputs
@@ -18,7 +19,7 @@ const Mugic = (() => {
   const STORE = 'mugicArcade';
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
-    connected: false, deviceCode: null, battery: null, batteryVolts: null, flicks: 0, lastFlickAt: -Infinity, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
+    flickScale: 1, connected: false, deviceCode: null, battery: null, batteryVolts: null, flicks: 0, lastFlickAt: -Infinity, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
     // as mounted in the MUGIC: euler X = yaw, Y = pitch, Z = roll (reversed)
     settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: false, invertYaw: false, thresh: 60 },
   };
@@ -52,7 +53,7 @@ const Mugic = (() => {
       return false;
     };
   };
-  const flick = m.trigger(() => m.settings.thresh);
+  const flick = m.trigger(() => m.settings.thresh * m.flickScale);
 
   // Parse an OSC message, returning its float args (ints are skipped).
   function parseOsc(view) {
@@ -256,8 +257,8 @@ const Mugic = (() => {
       axes.forEach(a => { bar(`mg${cap(a)}M`, clamp(m[a] / 90)); $(`mg${cap(a)}V`).textContent = m[a].toFixed(0) + '°'; });
       const max = 400, em = $('mgEnergyM');
       em.firstElementChild.style.left = 0; em.firstElementChild.style.width = Math.min(100, m.energy / max * 100) + '%';
-      em.lastElementChild.style.left = s.thresh / max * 100 + '%';
-      $('mgEnergyV').textContent = m.energy.toFixed(0); $('mgThreshV').textContent = s.thresh;
+      em.lastElementChild.style.left = s.thresh * m.flickScale / max * 100 + '%';
+      $('mgEnergyV').textContent = m.energy.toFixed(0); $('mgThreshV').textContent = Math.round(s.thresh * m.flickScale);
       // light up for a moment each time a flick is detected (energy crossing the red line)
       const lit = performance.now() - m.lastFlickAt < 400;
       $('mgFlickL').textContent = m.flicks ? `Flick at (${m.flicks})` : 'Flick at';
