@@ -19,6 +19,8 @@ canvas { background: #000; border: 1px solid #1d2230; max-width: 100%; height: a
 #mgConnect.mg-on:hover { background: #1fc458; }
 #mgCal { background: #e0262b; border: 2px solid #ff5a5a; color: #fff; font-weight: bold; font-size: 20px; padding: 10px 22px; }
 #mgCal:hover { background: #ff3b40; }
+#mgCal.mg-on { background: #18a84a; border-color: #4dff88; font-size: 16px; padding: 7px 16px; }
+#mgCal.mg-on:hover { background: #1fc458; }
 .mg-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; margin-bottom: 10px; }
 #mgStatus { color: var(--dim); }
 #mgStatus.ok { color: var(--acc); }
