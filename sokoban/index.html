@@ -286,7 +286,7 @@ function move(dir) {   // true if the player moved
     game.state = 'won';
     const best = saved.bestHard[game.n];
     if (hard && (!best || game.moves < best)) { saved.bestHard[game.n] = game.moves; save(); }
-    if (hard) Scores.submit({ game: 'sokoban', mode: 'hard', level: game.n + 1, score: game.moves }).then(showBoard);
+    if (hard) Scores.submit({ game: 'sokoban', mode: 'hard', level: game.n + 1, score: game.moves, lowerIsBetter: true }).then(showBoard);
   }
   return true;
 }

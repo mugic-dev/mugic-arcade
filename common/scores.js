@@ -1,5 +1,6 @@
 // Global scoreboard on Supabase (REST, no SDK). Needs common/config.js (and common/mugic.js to submit).
-//   Scores.submit({ game, mode, level, score, quiet })  asks for initials and posts; requires a connected MUGIC.
+//   Scores.submit({ game, mode, level, score, lowerIsBetter, quiet })  asks for initials (showing the board rank
+//     the score will take) and posts; requires a connected MUGIC.
 //     quiet: reuse the remembered initials without asking (only asks the first time), no notice if not posted
 //   Scores.top(game, { mode, level, lowerIsBetter, limit })  -> [{ initials, device, score, created_at }]
 //   Scores.render(el, rows, unit, { dates })  fills a table (unit: a suffix, or a function formatting the score;
@@ -20,6 +21,18 @@ const Scores = (() => {
     return r.ok ? r.json() : [];
   }
 
+  // Place the score would take on the board (ties go after earlier scores), or null if it can't be read.
+  async function rank(game, { mode = 'normal', level = null, lowerIsBetter = false }, score) {
+    const q = new URLSearchParams({ select: 'score', game: 'eq.' + game, mode: 'eq.' + mode,
+      score: (lowerIsBetter ? 'lte.' : 'gte.') + score, limit: 1 });
+    q.set('level', level == null ? 'is.null' : 'eq.' + level);
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/scores?${q}`, { headers: { ...headers(), Prefer: 'count=exact' } }).catch(() => null);
+    const total = r && r.ok && +(r.headers.get('content-range') || '').split('/')[1];
+    return Number.isFinite(total) ? total + 1 : null;
+  }
+
+  const rankText = n => n == null ? '' : n === 1 ? '🏆 NEW RECORD! You\'re #1!' : n <= 10 ? `Congrats! You're #${n} on the board!` : `You're #${n} on the board.`;
+
   async function latest() {
     if (!enabled()) return null;
     const r = await fetch(`${SUPABASE_URL}/rest/v1/scores?select=created_at&order=created_at.desc&limit=1`, { headers: headers() }).catch(() => null);
@@ -28,12 +41,12 @@ const Scores = (() => {
   }
 
   // Arcade-style three-letter entry; resolves to 'ABC' or null if cancelled.
-  function askInitials(title) {
+  function askInitials(title, headline = '') {
     let last = '';
     try { last = localStorage.getItem('mugicArcadeInitials') || ''; } catch (e) {}
     const d = document.createElement('dialog');
     d.className = 'sc-dialog';
-    d.innerHTML = `<form method="dialog"><p>${title}</p>
+    d.innerHTML = `<form method="dialog">${headline ? `<p class="sc-rank">${headline}</p>` : ''}<p>${title}</p>
       <input name="i" maxlength="3" pattern="[A-Za-z]{3}" required autocomplete="off" value="${last}">
       <div><button value="ok">Post</button> <button value="cancel" formnovalidate>Skip</button></div></form>`;
     document.body.append(d);
@@ -49,7 +62,7 @@ const Scores = (() => {
     }));
   }
 
-  async function submit({ game, mode = 'normal', level = null, score, quiet = false }) {
+  async function submit({ game, mode = 'normal', level = null, score, lowerIsBetter = false, quiet = false }) {
     if (!enabled()) return 'scoreboard not configured';
     if (!Mugic.connected || !Mugic.deviceCode) {
       const why = Mugic.connected ? 'the MUGIC device code was not read (reconnect the MUGIC)' : 'no MUGIC connected';
@@ -59,7 +72,8 @@ const Scores = (() => {
     let remembered = '';
     try { remembered = localStorage.getItem('mugicArcadeInitials') || ''; } catch (e) {}
     const initials = quiet && /^[A-Z]{3}$/.test(remembered) ? remembered
-      : await askInitials(`${score} — enter your initials (MUGIC ${Mugic.deviceCode})`);
+      : await askInitials(`${score} — enter your initials (MUGIC ${Mugic.deviceCode})`,
+                          rankText(await rank(game, { mode, level, lowerIsBetter }, score)));
     if (!initials) return 'skipped';
     const r = await fetch(`${SUPABASE_URL}/rest/v1/scores`, { method: 'POST', headers: headers(),
       body: JSON.stringify({ game, mode, level, score, initials, device: Mugic.deviceCode }) });
