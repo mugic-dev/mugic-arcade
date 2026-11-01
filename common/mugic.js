@@ -108,7 +108,19 @@ const Mugic = (() => {
     return d;
   }
 
-  m.calibrate = () => { if (raw) zero = { ...raw }; };
+  // Calibrate button: red until calibrated (and again after a disconnect), then green "Recalibrate";
+  // flashes "Centered ✓" for a moment on each calibration.
+  let calibrated = false, calFlashUntil = 0;
+  function calBtn() {
+    const b = document.getElementById('mgCal'); if (!b) return;
+    b.classList.toggle('mg-on', calibrated);
+    b.textContent = performance.now() < calFlashUntil ? 'Centered ✓' : calibrated ? 'Recalibrate' : 'Calibrate center';
+  }
+  m.calibrate = () => {
+    if (!raw) return;
+    zero = { ...raw }; calibrated = true; calFlashUntil = performance.now() + 1000;
+    calBtn(); setTimeout(calBtn, 1000);
+  };
 
   // Minimal protobuf walk: the bytes of length-delimited field `num`, or null.
   function pbField(bytes, num) {
@@ -198,6 +210,8 @@ const Mugic = (() => {
       btn.textContent = m.connected ? 'MUGIC connected' : 'Connect MUGIC';
       if (hub && statusEl) btn.hidden = m.connected;
     }
+    if (!m.connected) calibrated = false;
+    calBtn();
     each(s => s.status(text, ok, m));
   }
   m.mountStatus = el => { statusEl = el; };
@@ -227,6 +241,7 @@ const Mugic = (() => {
     const $ = id => document.getElementById(id), s = m.settings;
     $('mgConnect').onclick = m.connect;
     $('mgCal').onclick = m.calibrate;
+    calBtn();
     const bind = (id, key, prop = 'value', num = true) => {
       const e = $(id); if (!e) return;
       e[prop] = s[key];
