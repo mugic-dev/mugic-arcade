@@ -109,14 +109,15 @@ const Mugic = (() => {
     return d;
   }
 
-  // Calibrate button: red until calibrated (and again after a disconnect), then green "Recalibrate";
-  // flashes "Centered ✓" for a moment on each calibration.
+  // Calibrate button: red until the player clicks it (and again after a disconnect), then green "Recalibrate";
+  // flashes "Centered ✓" for a moment on each click. The automatic centering on connect leaves it red.
   let calibrated = false, calFlashUntil = 0;
   function calBtn() {
     const b = document.getElementById('mgCal'); if (!b) return;
     b.classList.toggle('mg-on', calibrated);
     b.textContent = performance.now() < calFlashUntil ? 'Centered ✓' : calibrated ? 'Recalibrate' : 'Calibrate center';
   }
+  const autoCenter = () => { if (raw) zero = { ...raw }; };
   m.calibrate = () => {
     if (!raw) return;
     zero = { ...raw }; calibrated = true; calFlashUntil = performance.now() + 1000;
@@ -195,7 +196,7 @@ const Mugic = (() => {
         await new Promise(r => setTimeout(r, 1500));
       }
       if (!m.deviceCode && m.connected) status(`connected: ${devName} (device code not read — scores can't be posted)`, true);
-      setTimeout(m.calibrate, 500);
+      setTimeout(autoCenter, 500);
     } catch (err) {
       console.error(err); status('connect failed: ' + err.message, false);
     }
@@ -277,7 +278,7 @@ const Mugic = (() => {
         const was = m.connected;
         Object.assign(m, { connected: h.connected, deviceCode: h.deviceCode, battery: h.battery, batteryVolts: h.batteryVolts });
         status(text, ok);
-        if (m.connected && !was) setTimeout(m.calibrate, 500);
+        if (m.connected && !was) setTimeout(autoCenter, 500);
       },
     });
     addEventListener('pagehide', unsub);
