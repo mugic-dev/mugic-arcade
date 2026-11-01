@@ -4,7 +4,9 @@ body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 ui-mon
        display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 12px 16px; }
 h1 { margin: 4px 0 10px; font-size: 20px; letter-spacing: 3px; color: var(--acc); }
 a { color: var(--acc); }
-.back { align-self: flex-start; color: var(--dim); text-decoration: none; }
+.back { align-self: flex-start; color: var(--bg); background: var(--acc); text-decoration: none; font-size: 18px; font-weight: bold;
+        padding: 6px 14px; border-radius: 6px; margin-bottom: 6px; }
+.back:hover { background: #8dffb3; }
 button, select, input { font: inherit; background: var(--panel); color: var(--fg); border: 1px solid #2a3040; border-radius: 4px; padding: 5px 9px; }
 button { cursor: pointer; }
 button:hover { border-color: var(--acc); }
@@ -15,6 +17,8 @@ canvas { background: #000; border: 1px solid #1d2230; max-width: 100%; height: a
 #mgConnect:hover { background: #ff3b40; }
 #mgConnect.mg-on { background: #18a84a; border-color: #4dff88; }
 #mgConnect.mg-on:hover { background: #1fc458; }
+#mgCal { background: #e0262b; border: 2px solid #ff5a5a; color: #fff; font-weight: bold; font-size: 20px; padding: 10px 22px; }
+#mgCal:hover { background: #ff3b40; }
 .mg-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; margin-bottom: 10px; }
 #mgStatus { color: var(--dim); }
 #mgStatus.ok { color: var(--acc); }
