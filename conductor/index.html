@@ -43,10 +43,10 @@
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js?v=15"></script>
-<script src="audio.js?v=15"></script>
-<script src="beat.js?v=15"></script>
-<script src="stage.js?v=15"></script>
+<script src="pieces.js?v=16"></script>
+<script src="audio.js?v=16"></script>
+<script src="beat.js?v=16"></script>
+<script src="stage.js?v=16"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
@@ -54,8 +54,8 @@ const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
 const median = a => a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : 0;
 
 // defaults from a recorded player: quiet beats are 35-45° dips of the hand, loud ones 100-120°
-const opts = { difficulty: 'easy', mode: 'dip', minDip: 10, full: 110 };
-const OPTS_KEY = 'mugicConductorOpts2';   // bump when the defaults change, to drop stale saved ones
+const opts = { difficulty: 'easy', mode: 'dip', minDip: 10, full: 80 };   // full: the loudest beat, well short of vertical
+const OPTS_KEY = 'mugicConductorOpts3';   // bump when the defaults change, to drop stale saved ones
 try { Object.assign(opts, JSON.parse(localStorage.getItem(OPTS_KEY)) || {}); } catch (e) {}
 const saveOpts = () => { try { localStorage.setItem(OPTS_KEY, JSON.stringify(opts)); } catch (e) {} };
 Mugic.mountPanel($('bar'), $('tuning'), {
