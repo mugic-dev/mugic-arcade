@@ -32,8 +32,14 @@ It is served by GitHub Pages straight from `main` (repo root): a push to `main` 
 | Slalom (downhill skiing) | `slalom/` | **Roll** carves (sharper with more tilt, and slower), tip **forward** to tuck, **back** to brake, **flick** jumps (clears rocks). Fixed course of 20 gates; a missed gate adds 5 s, trees/rocks/fence knock you down for 2 s. Ranked by time (lower is better; boards show m:ss.cc). Keyboard not ranked |
 | Marble Rush (Marble Madness style) | `marble/` | Tilt the MUGIC to roll the marble on an isometric course with ramps, ledges and slinkies; rolling off into the void or dropping more than 3 levels loses the marble back to the last checkpoint. 6 races (Practice, Beginner, Intermediate, Advanced, Expert, Impossible), leftover time carries over; 1000 × race + 100 per second left. Keyboard not ranked |
 | Warehouse (Sokoban style) | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
+| Conductor | `conductor/` | Each down-up **dip** of the hand (**pitch**) is a beat (or each **flick**, selectable): a preparatory beat + downbeat start the orchestra at that tempo, then it follows your beat; the dip's height sets the dynamics. **Yaw** (averaged over the stroke) cues the section you point at: beat while pointing in the two beats before its entry. Hold the final fermata, then cut off with a flick. Score: cues 30%, steadiness 25%, dynamics vs the score 20%, fermata 15%, tempo vs marked 10%. Easy shows banners, Medium only the cue lane. Keyboard not ranked |
 
 Every game also plays with the keyboard.
+
+**Conductor sound:** string-section samples from the [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE)
+(CC0), cut to small looped mono WAVs in `conductor/samples/` by `python3 conductor/tools/build_samples.py`
+(pure Python, ~120 MB download, ~6 MB result). Pieces are our own arrangements of public-domain works, in
+`conductor/pieces.js` (notes as `[beat, midi, beats]`, plus cues, dynamics, hairpins and the fermata).
 
 ## Requirements
 
