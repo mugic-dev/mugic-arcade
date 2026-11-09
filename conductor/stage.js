@@ -2,7 +2,11 @@
 // the spot where you point, your baton trail, the cue banner and the cue lane.
 const Stage = (() => {
   const W = 960, H = 540, CX = 480, CY = 500, LANE = 462;
-  const COLORS = { vln1: '#f2c14e', vln2: '#f08a5d', vla: '#b48ef0', vc: '#5db8f0', cb: '#6fdc8c' };
+  const COLORS = { vln1: '#f2c14e', vln2: '#f08a5d', vln: '#f2c14e', vla: '#b48ef0', vc: '#5db8f0', cb: '#6fdc8c', low: '#5db8f0',
+                   ww: '#8fd3c8', br: '#e0b24a' };
+  // how a section's players are drawn: its look, or the look of its instrument
+  const LOOK = { vlnp: 'vln', vcp: 'vc', cbp: 'cb', fl: 'ww', ob: 'ww', cl: 'ww', bn: 'ww', bns: 'ww', hn: 'br', tp: 'br', tb: 'br', tu: 'br' };
+  const lookOf = s => s.look || LOOK[s.inst] || s.inst;
   const ARC = 62, GAP = 3;   // the orchestra spans ±ARC degrees of stage angle, GAP degrees between sections
 
   // stage position for stage angle `a` (degrees, 0 = straight ahead) at radius r
@@ -13,7 +17,9 @@ const Stage = (() => {
   const layoutCache = new Map();
   function layout(piece) {
     if (layoutCache.has(piece)) return layoutCache.get(piece);
-    const rowsOf = s => s.inst === 'cb' ? [[300, s.players]] : [[210, Math.ceil(s.players / 2)], [275, Math.floor(s.players / 2)]];
+    const rowsOf = s => lookOf(s) === 'cb' ? [[300, s.players]]
+      : ['ww', 'br'].includes(lookOf(s)) ? [[285, Math.ceil(s.players / 2)], [335, Math.floor(s.players / 2)]]   // winds and brass on the risers
+      : [[210, Math.ceil(s.players / 2)], [275, Math.floor(s.players / 2)]];
     const width = s => Math.max(...rowsOf(s).map(([, n]) => n));
     const total = piece.sections.reduce((a, s) => a + width(s), 0), per = (2 * ARC - GAP * (piece.sections.length - 1)) / total;
     const seats = [], centers = {};
@@ -70,10 +76,21 @@ const Stage = (() => {
 
   // one musician; st = section state { bow (0..1 position), playing, unsure, lift }
   function player(ctx, p, st, t) {
-    const { x, y, scale: k, sec } = p, inst = sec.inst, c = COLORS[sec.id];
+    const { x, y, scale: k, sec } = p, inst = lookOf(sec), c = COLORS[sec.id] || '#e8d9c0';
     const look = st.unsure ? Math.sin(t * 3 + p.seed) * 3 * k : 0;   // glancing around when unsure
     ctx.save(); ctx.translate(x, y); ctx.scale(k, k);
-    if (inst === 'cb') {   // standing bass player
+    if (inst === 'ww') {   // a seated wind player, instrument from the mouth down
+      chair(ctx); ctx.fillStyle = '#1b1b22'; ctx.fillRect(-8, -38, 16, 26);
+      head(ctx, look, -46, c);
+      ctx.strokeStyle = '#222'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(3, -44); ctx.lineTo(9 - 3 * st.lift, -20 - 6 * st.lift); ctx.stroke();
+      if (st.playing) { ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(12, -24, 3 + 2 * st.bow, 0, Math.PI); ctx.stroke(); }
+    } else if (inst === 'br') {   // a seated brass player, the bell raised when about to play
+      chair(ctx); ctx.fillStyle = '#1b1b22'; ctx.fillRect(-8, -38, 16, 26);
+      head(ctx, look, -46, c);
+      const by = -30 - 10 * st.lift;
+      ctx.strokeStyle = '#b8892a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(4, -44); ctx.lineTo(12, by); ctx.stroke();
+      ctx.fillStyle = st.playing ? '#ffd970' : '#b8892a'; ctx.beginPath(); ctx.arc(13, by, 5, 0, 2 * Math.PI); ctx.fill();
+    } else if (inst === 'cb') {   // standing bass player
       ctx.fillStyle = '#1b1b22'; ctx.fillRect(-7, -58, 14, 40); ctx.fillRect(-6, -18, 5, 18); ctx.fillRect(2, -18, 5, 18);
       ctx.fillStyle = '#7a3e1b'; ctx.beginPath(); ctx.ellipse(-10, -26, 11, 22, -0.15, 0, 2 * Math.PI); ctx.fill();
       ctx.strokeStyle = '#3a1e0c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-14, -48); ctx.lineTo(-6, -78); ctx.stroke();
@@ -145,14 +162,20 @@ const Stage = (() => {
     }
   }
 
+  // the box fits both lines; a line too long for the screen is set smaller
   function banner(ctx, b) {
     if (!b) return;
-    ctx.font = 'bold 24px system-ui, sans-serif'; ctx.textAlign = 'center';
-    const w = Math.max(ctx.measureText(b.text).width, b.sub ? 200 : 0) + 48;
+    const MAX = W - 120, fit = (text, weight, size) => {
+      for (; size > 11; --size) { ctx.font = `${weight} ${size}px system-ui, sans-serif`; if (ctx.measureText(text).width <= MAX) break; }
+      return { font: ctx.font, width: ctx.measureText(text).width };
+    };
+    const main = fit(b.text, 'bold', 24), sub = b.sub ? fit(b.sub, '', 16) : { width: 0 };
+    const w = Math.max(main.width, sub.width) + 48;
+    ctx.textAlign = 'center';
     ctx.fillStyle = b.ok ? 'rgba(24, 168, 74, 0.92)' : b.bad ? 'rgba(224, 38, 43, 0.92)' : 'rgba(30, 90, 200, 0.92)';
     ctx.beginPath(); ctx.roundRect(CX - w / 2, 50, w, b.sub ? 64 : 42, 10); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.fillText(b.text, CX, 79);
-    if (b.sub) { ctx.font = '16px system-ui, sans-serif'; ctx.fillText(b.sub, CX, 104); }
+    ctx.fillStyle = '#fff'; ctx.font = main.font; ctx.fillText(b.text, CX, 79);
+    if (b.sub) { ctx.font = sub.font; ctx.fillText(b.sub, CX, 104); }
     ctx.textAlign = 'left';
   }
 
@@ -193,7 +216,7 @@ const Stage = (() => {
     if (g.pos >= 0) {
       const bar = Math.floor(g.pos / g.piece.meter) + 1, beat = Math.floor(g.pos % g.piece.meter) + 1;
       ctx.textAlign = 'right';
-      ctx.fillText(`bar ${Math.min(bar, g.piece.bars)}:${beat}   ♩ = ${Math.round(g.bpm)} (${g.piece.tempo})`, W - 14, 24);
+      ctx.fillText(`bar ${Math.min(bar, g.piece.bars)}:${beat}   ♩ = ${Math.round(g.bpm)} (${g.marked})`, W - 14, 24);
       ctx.textAlign = 'left';
     }
     // loudness: yours (bar) against the score's (gold mark)
@@ -226,7 +249,8 @@ const Stage = (() => {
     for (const p of L.seats) player(ctx, p, g.sections[p.sec.id], t);
     ctx.font = 'bold 13px system-ui, sans-serif'; ctx.textAlign = 'center';
     for (const s of g.piece.sections) {
-      const p = at(L.centers[s.id], s.inst === 'cb' ? 300 : 275); p.y -= s.inst === 'cb' ? 92 : 64; ctx.fillStyle = COLORS[s.id]; ctx.fillText(s.name, p.x, p.y);
+      const look = lookOf(s), riser = look === 'ww' || look === 'br';
+      const p = at(L.centers[s.id], look === 'cb' ? 300 : riser ? 335 : 275); p.y -= look === 'cb' ? 92 : riser ? 70 : 64; ctx.fillStyle = COLORS[s.id]; ctx.fillText(s.name, p.x, p.y);
     }
     ctx.textAlign = 'left';
     if (g.cueTarget && g.pointing && !onTarget) cueArrow(ctx, ang, L.centers[g.cueTarget.id], t);

@@ -52,8 +52,8 @@ const Orchestra = (() => {
   // Load the samples a piece needs (six at a time); onProgress(0..1).
   async function load(piece, onProgress = () => {}) {
     await init();
-    const insts = [...new Set(piece.sections.map(s => s.inst))];
-    const jobs = insts.flatMap(inst => index[inst].map(m => [inst, m])).filter(([i, m]) => !buffers[i + m]);
+    const insts = PIECES.instruments(piece);
+    const jobs = insts.flatMap(inst => index.insts[inst].notes.map(m => [inst, m])).filter(([i, m]) => !buffers[i + m]);
     let done = 0, next = 0;
     const worker = async () => {
       while (next < jobs.length) {
@@ -80,14 +80,16 @@ const Orchestra = (() => {
   }
 
   // Play `midi` on a section from audio time t for `secs`; returns the voice (for an early release).
-  function note(id, midi, t, secs, vel = 1) {
-    const ch = channels[id], list = index[ch.inst];
+  // pizzicato and percussion (oneshot) ring out by themselves; drums (unpitched) play at their own pitch
+  function note(id, midi, t, secs, vel = 1, inst = channels[id].inst) {
+    const ch = channels[id], info = index.insts[inst], list = info.notes;
     const s = list.reduce((a, b) => Math.abs(b - midi) < Math.abs(a - midi) ? b : a);
     const src = ctx.createBufferSource(), env = ctx.createGain();
-    src.buffer = buffers[ch.inst + s];
+    src.buffer = buffers[inst + s];
     src.playbackRate.value = Math.pow(2, (midi - s) / 12);
-    src.loop = true; [src.loopStart, src.loopEnd] = index.loop;
-    const attack = Math.min(0.06, secs * 0.3);
+    if (info.unpitched) src.playbackRate.value = 1;
+    if (!info.oneshot) { src.loop = true; [src.loopStart, src.loopEnd] = index.loop; }
+    const attack = info.oneshot ? 0.003 : Math.min(0.06, secs * 0.3);
     env.gain.setValueAtTime(0, t);
     env.gain.linearRampToValueAtTime(vel, t + attack);
     src.connect(env).connect(ch.gain);
@@ -99,7 +101,7 @@ const Orchestra = (() => {
       env.gain.cancelScheduledValues(at); env.gain.setTargetAtTime(0, at, fade / 3);
       src.stop(at + fade * 2);
     };
-    if (Number.isFinite(secs)) v.release(t + secs, Math.min(0.3, 0.1 + secs * 0.2));
+    if (Number.isFinite(secs) && !info.oneshot) v.release(t + secs, Math.min(0.3, 0.1 + secs * 0.2));
     voices.add(v); src.onended = () => voices.delete(v);
     return v;
   }
