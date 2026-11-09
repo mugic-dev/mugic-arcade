@@ -29,37 +29,41 @@
 <div id="tuning"></div>
 <!-- bump ?v= on the scripts above with every change, so browsers don't mix a new page with old cached scripts -->
 <p class="help">Wear the MUGIC on your conducting hand, point it at the middle of the orchestra (the violas) and
-  click Calibrate center. Each beat is a small down-and-up dip of the hand: the bottom of the dip is where the
-  orchestra plays. Bigger beats play louder. To start, give a preparatory beat, then the downbeat: the orchestra
-  comes in on the downbeat at the tempo of those two beats, and then follows you. To cue a section, point at it while
-  you beat in the bar before it comes in. Cue it in time and it plays out with confidence; miss it and it comes in
-  timid and unsure. At the end, hold the last chord (the fermata) as long as you like, then cut it off with a flick.
-  If your dips don't register, set "Beat from" to flick and beat with small flicks.
+  click Calibrate center. Raise your hand and hold it still: the orchestra gets ready. Each beat is a down-and-up dip
+  of the hand — the bottom of the dip is where the orchestra plays; bigger beats play louder. Give a preparatory
+  beat, then the downbeat: the orchestra comes in on the downbeat at the tempo of those two beats (within ±25% of the
+  marked tempo), and then follows you. To cue a section, point at it as it comes in — a quick point toward it is
+  enough (Easy shows a gold arrow and turns your beam green on target). Miss a cue and that section comes in timid.
+  At the end, hold the last chord (the fermata) as long as you like, then cut it off with a flick.
+  If your dips don't register, lower "Smallest beat" or set "Beat from" to flick.
+  Record practice plays the piece at its marked tempo and saves your motion to a file (for tuning the game).
   Keyboard (practice, not posted): space beats, ← → or 1–5 point at a section, ↑ ↓ bigger / smaller beats.</p>
 
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js?v=4"></script>
-<script src="audio.js?v=4"></script>
-<script src="beat.js?v=4"></script>
-<script src="stage.js?v=4"></script>
+<script src="pieces.js?v=5"></script>
+<script src="audio.js?v=5"></script>
+<script src="beat.js?v=5"></script>
+<script src="stage.js?v=5"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
 const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
 const median = a => a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : 0;
 
-const opts = { difficulty: 'easy', mode: 'dip', minDip: 4, full: 30 };
-try { Object.assign(opts, JSON.parse(localStorage.getItem('mugicConductorOpts')) || {}); } catch (e) {}
-const saveOpts = () => { try { localStorage.setItem('mugicConductorOpts', JSON.stringify(opts)); } catch (e) {} };
+// defaults from a recorded player: quiet beats are 35-45° dips of the hand, loud ones 100-120°
+const opts = { difficulty: 'easy', mode: 'dip', minDip: 10, full: 110 };
+const OPTS_KEY = 'mugicConductorOpts2';   // bump when the defaults change, to drop stale saved ones
+try { Object.assign(opts, JSON.parse(localStorage.getItem(OPTS_KEY)) || {}); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(OPTS_KEY, JSON.stringify(opts)); } catch (e) {} };
 Mugic.mountPanel($('bar'), $('tuning'), {
   keys: 'space, ← →, ↑ ↓',
   axes: ['yaw', 'pitch'],
   extraRows: [
     ['Beat from', `<select id="mode"><option value="dip">dip of the hand</option><option value="flick">flick</option></select>`, 'modeVal'],
-    ['Smallest beat', `<input type="range" id="minDip" min="2" max="15" value="${opts.minDip}">`, 'minDipVal'],
-    ['Loudest beat', `<input type="range" id="full" min="10" max="60" value="${opts.full}">`, 'fullVal'],
+    ['Smallest beat', `<input type="range" id="minDip" min="2" max="30" value="${opts.minDip}">`, 'minDipVal'],
+    ['Loudest beat', `<input type="range" id="full" min="30" max="150" value="${opts.full}">`, 'fullVal'],
   ],
 });
 const bindOpt = (id, num, fmt = v => v) => {
@@ -79,7 +83,7 @@ $('piece').onchange = e => {
 };
 const cv = $('stage'), ctx = cv.getContext('2d');
 const section = id => piece.sections.find(s => s.id === id);
-const ZONE = 10;         // cue zone: degrees of yaw either side of a section's center
+const CUE_HOLD = 0.1;    // seconds of pointing at a section (in its cue window) that cue it
 const RANGE = 0.25;      // the orchestra follows tempos within ±25% of the marked one, no further
 
 const game = { state: 'title', banner: null, flash: null, beats: [], keyboard: false, report: null };
@@ -89,7 +93,7 @@ let kbYaw = 0, kbSize = 18;
 function newRun(fromBeat = 0) {
   Object.assign(game, { state: 'ready', startBeat: fromBeat, report: null, flash: null, armed: false, tooFast: 0 });
   if (fromBeat === 0) {
-    Object.assign(game, { cueState: piece.cues.map(() => 'pending'), cueYaw: piece.cues.map(() => null), stops: 0, keyboard: !Mugic.connected,
+    Object.assign(game, { cueState: piece.cues.map(() => 'pending'), cueYaw: piece.cues.map(() => null), cueHold: piece.cues.map(() => 0), stops: 0, keyboard: !Mugic.connected,
       stats: { dev: [], bpm: [], dyn: [], together: [] }, level: PIECES.target(piece, 0), unsteady: 0 });
     for (const s of piece.sections) sec[s.id] = { glow: 0, flash: 0, conf: 1, lift: 0, bow: 0, playing: false, unsure: false, notes: [] };
   }
@@ -101,7 +105,9 @@ const toAudio = t => Orchestra.now() - (performance.now() / 1000 - t);
 const sizeLevel = size => clamp(0.12 + 0.88 * (size - opts.minDip) / Math.max(1, opts.full - opts.minDip), 0.08, 1);
 const flash = (text, kind, secs = 1.6) => { game.flash = { text, [kind]: true, until: performance.now() / 1000 + secs }; };
 const clampRate = (want, cur) => clamp(clamp(want, cur * 0.6, cur * 1.6), BPS * (1 - RANGE), BPS * (1 + RANGE));
-const where = yaw => yaw < -25 ? 'far left' : yaw < -5 ? 'left' : yaw < 15 ? 'to the middle' : yaw < 33 ? 'right' : 'far right';
+const where = yaw => yaw < -45 ? 'far left' : yaw < -8 ? 'left' : yaw < 22 ? 'to the middle' : yaw < 58 ? 'right' : 'far right';
+const nearest = yaw => piece.sections.reduce((a, s) => Math.abs(yaw - s.yaw) < Math.abs(yaw - a.yaw) ? s : a);
+const yawNow = () => Mugic.connected ? Mugic.yaw : kbYaw;
 
 // ---------- practice recording: the piece at the marked tempo, your motion saved to a file ----------
 const COUNT_IN = 4;
@@ -182,15 +188,17 @@ function follow(ta, e, lvl) {
   game.tooFast = ratio > 1 + RANGE + 0.05 ? 1 : ratio < 1 - RANGE - 0.05 ? -1 : 0;
   game.level = 0.5 * game.level + 0.5 * lvl;
   game.stats.dyn.push(Math.abs(game.level - PIECES.target(piece, p)));
-  checkCues(p, e.yaw);
 }
 
-const inWindow = (c, p) => p >= c.beat - 2.5 && p <= c.beat + 0.5;   // the beats in which pointing + beating cues
-function checkCues(p, yaw) {
+const inWindow = (c, p) => p >= c.beat - 2.5 && p <= c.beat + 1;   // the beats in which pointing at a section cues it
+// every frame: pointing at a section for CUE_HOLD seconds in its window cues it; remembers your widest point for a miss
+function checkCues(p, yaw, dt) {
+  const home = piece.sections[piece.sections.length >> 1].yaw;
   piece.cues.forEach((c, i) => {
-    if (game.cueState[i] !== 'pending' || !inWindow(c, p)) return;
-    game.cueYaw[i] = yaw;
-    if (Math.abs(yaw - section(c.section).yaw) <= ZONE) hitCue(i);
+    if (game.cueState[i] !== 'pending' || !inWindow(c, p) || game.state !== 'play') return;
+    if (game.cueYaw[i] == null || Math.abs(yaw - home) > Math.abs(game.cueYaw[i] - home)) game.cueYaw[i] = yaw;
+    game.cueHold[i] = nearest(yaw).id === c.section ? game.cueHold[i] + dt : 0;
+    if (game.cueHold[i] >= CUE_HOLD) hitCue(i);
   });
 }
 function hitCue(i) {
@@ -201,10 +209,8 @@ function hitCue(i) {
 // why a cue was missed, from where you pointed during its window
 function missText(i) {
   const s = section(piece.cues[i].section), y = game.cueYaw[i];
-  if (y == null) return { text: `${s.name} came in unsure: no beat while their entry was due`, sub: 'keep beating, and point at them for the two beats before they play' };
-  const other = piece.sections.find(q => Math.abs(y - q.yaw) <= ZONE);
-  const dir = s.yaw < y ? 'further left' : 'further right';
-  return { text: `${s.name} came in unsure`, sub: other ? `you pointed at the ${other.name}; the ${s.name} are ${dir}` : `you pointed between sections; the ${s.name} are ${dir}` };
+  const other = y == null ? null : nearest(y), dir = s.yaw < (y ?? 0) ? 'further left' : 'further right';
+  return { text: `${s.name} came in unsure`, sub: other ? `you pointed at most toward the ${other.name}; the ${s.name} are ${dir}` : `point ${where(s.yaw)} at them as they come in` };
 }
 
 function cutoff() {
@@ -266,6 +272,7 @@ function update(dt) {
       game.cueState[i] = 'miss'; sec[s.id].conf = 0.35;
       game.flash = { ...missText(i), bad: true, until: performance.now() / 1000 + 3 };
     });
+    if (!game.recording) checkCues(p, yawNow(), dt);
     const horizon = Math.min(Orchestra.beatAt(now + 0.15), piece.fermata + 0.01);
     for (const s of piece.sections) {
       const notes = piece.parts[s.id], jitter = (Math.random() * 2 - 1) * game.unsteady * 0.08;
@@ -312,7 +319,7 @@ function animate(dt) {
     st.lift += ((soon ? 1 : 0) - st.lift) * Math.min(1, dt * 4);
     st.unsure = st.conf < 0.7 && playing;
     st.flash = Math.max(0, st.flash - dt * 0.8);
-    const pointed = Math.abs(yaw - s.yaw) <= ZONE && (Mugic.connected || game.keyboard);
+    const pointed = nearest(yaw).id === s.id && (Mugic.connected || game.keyboard);
     const target = cue && cue.section === s.id ? 0.35 + 0.5 * pulse : 0;
     st.glow += (Math.max(pointed ? 0.45 : 0, target) + st.flash - st.glow) * Math.min(1, dt * 8);
   }
@@ -346,8 +353,8 @@ function currentBanner(p) {
       const c = nextCue(p);
       if (c) {
         const s = section(c.section), now = inWindow(c, p), left = Math.ceil(c.beat - p);
-        return now ? { text: `NOW: point ${where(s.yaw)} at the ${s.name} and beat!`, sub: 'the gold arrow shows where; your beam turns green on target' }
-          : { text: `${s.name} come in at bar ${c.beat / piece.meter + 1} (in ${left} beats)`, sub: `get ready to point ${where(s.yaw)}: start pointing 2 beats before` };
+        return now ? { text: `NOW: point ${where(s.yaw)} at the ${s.name}!`, sub: 'a quick point is enough — the gold arrow shows where, your beam turns green on target' }
+          : { text: `${s.name} come in at bar ${c.beat / piece.meter + 1} (in ${left} beats)`, sub: `get ready to point ${where(s.yaw)} at them` };
       }
       const pin = piece.hairpins.find(h => h.from - p <= 4 && h.to > p);
       if (pin) return { text: pin.kind === 'cresc' ? 'Getting louder: bigger and bigger beats' : 'Getting softer: smaller beats' };
@@ -401,7 +408,8 @@ let last = performance.now();
   Stage.draw(ctx, {
     piece, pos: p, t: tNow / 1000, now: tNow / 1000, sections: sec, yaw: Mugic.connected ? Mugic.yaw : kbYaw,
     pointing: Mugic.connected || game.keyboard, history: Beat.history, beats: game.beats,
-    cueTarget: opts.difficulty === 'easy' && nextCue(p) ? section(nextCue(p).section) : null, zone: ZONE,
+    cueTarget: opts.difficulty === 'easy' && nextCue(p) ? section(nextCue(p).section) : null,
+    onTarget: !!nextCue(p) && nearest(Mugic.connected ? Mugic.yaw : kbYaw).id === nextCue(p).section,
     banner: currentBanner(p), cueState: game.cueState || piece.cues.map(() => 'pending'),
     bpm: game.smoothIv ? 60 / game.smoothIv : piece.tempo, level: game.level ?? 0, target: PIECES.target(piece, Math.max(0, p)),
     report: game.report,

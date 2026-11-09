@@ -31,8 +31,8 @@ const Beat = (() => {
     last = { t, pitch };
     if (b.mode !== 'dip') return;
     high = Math.max(high, pitch);
-    if (pitch < low.pitch) low = { pitch, t };
-    if (vel < FALL) falling = true;
+    if (vel < FALL && !falling) { falling = true; low = { pitch, t }; }   // a new downstroke: find its own bottom
+    if (falling && pitch < low.pitch) low = { pitch, t };
     if (falling && vel > RISE) {
       falling = false;
       if (high - low.pitch >= b.minDip) {

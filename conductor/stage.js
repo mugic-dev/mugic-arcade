@@ -3,8 +3,8 @@
 const Stage = (() => {
   const W = 960, H = 540, CX = 480, CY = 500, LANE = 462;
   const COLORS = { vln1: '#f2c14e', vln2: '#f08a5d', vla: '#b48ef0', vc: '#5db8f0', cb: '#6fdc8c' };
-  const SPAN = 8;   // half-width (degrees of yaw) each section occupies on the arc
-  const ARC = 1.3;  // stage angle per degree of yaw, to spread the orchestra across the screen
+  const SPAN = 12;   // half-width (degrees of yaw) each section occupies on the arc
+  const ARC = 0.85;  // stage angle per degree of yaw, to spread the orchestra across the screen
 
   // stage position for yaw `a` (degrees) at radius r
   const at = (a, r) => { const t = a * ARC * Math.PI / 180; return { x: CX + r * Math.sin(t) * 1.25, y: CY - r * Math.cos(t) * 0.62 }; };
@@ -113,7 +113,7 @@ const Stage = (() => {
 
   // the baton: the last second of the hand's motion as a fading gold ribbon, sparks at each beat
   function trail(ctx, history, beats, t) {
-    const pt = s => ({ x: CX + s.yaw * 4.5, y: 250 - s.pitch * 4 });
+    const pt = s => ({ x: CX + s.yaw * 4.5, y: 330 - s.pitch * 3 });
     const h = history.filter(s => s.t > t - 1.1);
     ctx.lineCap = 'round';
     for (let i = 1; i < h.length; ++i) {
@@ -205,7 +205,7 @@ const Stage = (() => {
   function draw(ctx, g) {
     hall(ctx);
     for (const s of g.piece.sections) glow(ctx, s, g.sections[s.id].glow, COLORS[s.id]);
-    const onTarget = g.cueTarget && Math.abs(g.yaw - g.cueTarget.yaw) <= g.zone;
+    const onTarget = g.onTarget;
     if (g.pointing) pointer(ctx, g.yaw, onTarget);
     const t = g.t;
     for (const p of seats(g.piece)) player(ctx, p, g.sections[p.sec.id], t);
