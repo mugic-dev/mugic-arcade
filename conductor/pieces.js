@@ -94,16 +94,22 @@ const PIECES = (() => {
   // ---- Beethoven, Symphony No. 9, "Ode to Joy": the theme climbs from the low strings to the full orchestra ----
   const ode = (() => {
     const bar = n => 4 * (n - 1);
-    const A = 'F#4:1 F#4 G4 A4 | A4 G4 F#4 E4 | D4 D4 E4 F#4 | F#4:1.5 E4:.5 E4:2';
-    const A2 = 'F#4:1 F#4 G4 A4 | A4 G4 F#4 E4 | D4 D4 E4 F#4 | E4:1.5 D4:.5 D4:2';
-    const B = 'E4:1 E4 F#4 D4 | E4 F#4:.5 G4 F#4:1 D4 | E4 F#4:.5 G4 F#4:1 E4 | D4 E4 A3:2';
-    const HA = 'D:4 D:2 A:2 D:4 A:4', HA2 = 'D:4 D:2 A:2 D:4 A:2 D:2', HB = 'A:4 A:2 D:2 A:2 D:2 D:2 A7:2';
-    // eight bars: two four-bar phrases [[melody, harmony], ...]
-    const theme = (start, ph) => ph.flatMap(([m], i) => mel(start + 16 * i, m));
-    const harm = (start, ph) => ph.flatMap(([, h], i) => chords(start + 16 * i, h));
-    const AA = [[A, HA], [A2, HA2]], BA = [[B, HB], [A2, HA2]];
+    // Four-part harmony from the public-domain SATB setting on the Mutopia Project (BeethovenLv/ode, P. Chubb),
+    // transposed from G to D; [bars 1-8, bars 9-16] of the hymn (the second half is the B phrase + the return)
+    const V = {
+      s: ['F#4:1 F#4 G4 A4 | A4 G4 F#4 E4 | D4 D4 E4 F#4 | F#4:1.5 E4:.5 E4:2 | F#4:1 F#4 G4 A4 | A4 G4 F#4 E4 | D4 D4 E4 F#4 | E4:1.5 D4:.5 D4:2',
+          'E4:1 E4 F#4 D4 | E4 F#4:.5 G4 F#4:1 D4 | E4 F#4:.5 G4 F#4:1 E4 | D4 E4 A3:2 | F#4:1 F#4 G4 A4 | A4 G4 F#4 E4 | D4 D4 E4 F#4 | E4:1.5 D4:.5 D4:2'],
+      a: ['D4:1 D4 E4 D4 | D4:1.5 E4:.5 D4:1 C#4 | A3 A3 C#4 D4 | D4:1.5 C#4:.5 C#4:2 | D4:1 D4 E4 D4 | D4:1.5 E4:.5 D4:1 C#4 | A3 A3 C#4 D4 | D4 C#4 A3:2',
+          'A3:1 A3 A3 A3 | A3 A3 A3 A3 | A3 A3 C#4 C#4 | B3 G#3 A3:2 | A3:1 D4 E4 E4 | F#4 D4:.5 E4 D4:1 B3 | B3 A3 C#4 D4 | D4 C#4 D4:2'],
+      t: ['A3:1 A3 G3 F#3 | B3:1.5 A3:.5 A3:1 A3 | F#3 F#3 A3 A3 | A3:1.5 A3:.5 A3:2 | A3:1 A3 G3 F#3 | B3:1.5 A3:.5 A3:1 A3 | F#3 F#3 A3 A3 | A3 A3 F#3:2',
+          'C#3:1 C#3 D3 B2 | C#3 D3:.5 E3 D3:1 B2 | C#3 C#3 C#3 F#3 | F#3 E3 D3 C#3 | D3 A3 C4 C4 | D4:1.5 A3:.5 A3:1 G3 | D3 D3 G3 A3 | A3 A3 F#3:2'],
+      b: ['D3:1 D3 D3 D3 | B2:1.5 C#3:.5 D3:1 A2 | F#3 F#3 E3 D3 | A2:1.5 A2:.5 A2:2 | D3:1 D3 D3 D3 | B2:1.5 C#3:.5 D3:1 A2 | F#3 F#3 E3 D3 | A2 A2 D2:2',
+          'A2:1 A2 A2 A2 | A2 A2 A2 A2 | A2 A2 A#2 A#2 | B2 E2 A2:2 | D3:1 D3 C3 C3 | B2:1.5 C#3:.5 D3:1 G2 | G2 F#2 E2 D2 | A2 A2 D2:2'],
+    };
+    // voice v of half h from `start`, shifted k semitones, kept at or above `low` (an octave up below it)
+    const part = (v, h, start, k = 0, inst, low = 0) => as(mel(start, V[v][h]).map(([b, m, d]) => [b, m + k < low ? m + k + 12 : m + k, d]), inst);
+    const from = (notes, b) => notes.filter(n => n[0] >= b);
     const s2 = bar(9), s3 = bar(17), s4 = bar(25), END = bar(33), FINAL = chords(END, 'D:4');
-    const h2 = harm(s2, AA), h34 = [...harm(s3, BA), ...harm(s4, AA)], h4 = harm(s4, AA), hw = chords(bar(21), HA2);
     return {
       id: 'ode', title: 'Ode to Joy (Symphony No. 9)', composer: 'Ludwig van Beethoven', meter: 4, tempo: 76, bars: 33,
       sections: [
@@ -115,13 +121,16 @@ const PIECES = (() => {
         { id: 'cb', name: 'Basses', inst: 'cb', players: 2 },
       ],
       parts: {
-        vc: [...up(theme(0, AA), -12), ...pad(h2, 50, 1), ...roots(h34, 43), ...pad(FINAL, 50)],
-        vla: [...theme(s2, AA), ...pad(h34, 57, 1), ...pad(FINAL, 57, 1)],
-        cb: [...roots(chords(bar(13), HA2), 38), ...roots(h34, 38), ...roots(FINAL, 38)],
-        vln: [...up(theme(s3, BA), 12), ...up(theme(s4, AA), 12), ...pad(FINAL, 74, 1)],
-        ww: [...pad(hw, 69, 1, 'ob'), ...pad(hw, 62, 1, 'cl'), ...up(theme(s4, AA), 12), ...pad(h4, 62, 1, 'cl'),
+        // the theme alone in the cellos; under the violas, the alto line a third below; then the tenor, then the bass
+        vc: [...part('s', 0, 0, -12), ...part('a', 0, s2), ...part('t', 1, s3), ...part('b', 0, s4), ...pad(FINAL, 50)],
+        vla: [...part('s', 0, s2), ...part('a', 1, s3), ...part('a', 0, s4), ...pad(FINAL, 57, 1)],
+        cb: [...from(part('b', 0, s2, -12, undefined, 30), bar(13)), ...part('b', 1, s3, -12, undefined, 30),
+             ...part('b', 0, s4, -12, undefined, 30), ...roots(FINAL, 38)],
+        vln: [...part('s', 1, s3, 12), ...part('s', 0, s4, 12), ...pad(FINAL, 74, 1)],
+        ww: [...from(part('a', 1, s3, 12, 'ob'), bar(21)), ...from(part('t', 1, s3, 12, 'cl'), bar(21)),
+             ...part('s', 0, s4, 12), ...part('a', 0, s4, 12, 'ob'), ...part('t', 0, s4, 12, 'cl'),
              ...pad(FINAL, 74, 2), ...pad(FINAL, 62, 0, 'cl')],
-        br: [...theme(s4, AA), ...pad(h4, 57, 1, 'hn'), ...roots(h4, 38, 'tb'), ...roots(h4, 26, 'tu'),
+        br: [...part('s', 0, s4), ...part('t', 0, s4, 0, 'hn'), ...part('a', 0, s4, 0, 'tb'), ...part('b', 0, s4, 0, 'tu'),
              ...hits(Array.from({ length: 8 }, (_, i) => s4 + 4 * i), 'timp'),
              ...pad(FINAL, 62), ...pad(FINAL, 57, 1, 'hn'), ...roots(FINAL, 38, 'tb'), ...hits([END], 'timp')],
       },
