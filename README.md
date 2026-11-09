@@ -35,6 +35,17 @@ It is served by GitHub Pages straight from `main` (repo root): a push to `main` 
 
 Every game also plays with the keyboard.
 
+## Music (`music.html`, not on the arcade menu)
+
+| Piece | Folder | Controls |
+|---|---|---|
+| Conductor | `conductor/` | Each down-up **dip** of the hand (**pitch**) is a beat (or each **flick**); a still raised hand, then a preparatory beat + downbeat start the orchestra, which then follows your beat within ±40% of the marked tempo (Mountain King accelerates from ♩ = 70 to 140). The dip's height sets the dynamics (10° softest … 110° loudest). Cue a section **on its entry beat**: swing (**yaw**) ≥15° toward it, or, already facing it, dip ≥12° lower; a beat or two off confuses it. Hold the final fermata, cut off with a flick. Pieces: Canon in D, Ode to Joy, The Blue Danube (in one), In the Hall of the Mountain King. *Record practice* saves your motion against the score as JSON for tuning. Keyboard not ranked |
+
+**Conductor sound:** string, wind, brass and percussion samples from the [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE)
+(CC0), cut to small looped mono WAVs in `conductor/samples/` by `python3 conductor/tools/build_samples.py`
+(pure Python; each piece loads only its instruments, 19 MB in all). Pieces are our own arrangements of public-domain works, in
+`conductor/pieces.js` (notes as `[beat, midi, beats]`, plus cues, dynamics, hairpins and the fermata).
+
 ## Requirements
 
 - MUGIC firmware ≥ 2.2.0 in **BLE output mode** (`SetOutputMode` = 2) with **OSC** data format.

@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Conductor</title>
+<link rel="stylesheet" href="../common/arcade.css">
+<style>
+  canvas { image-rendering: auto; }
+  .setup { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; margin-bottom: 10px; }
+  #go { background: #18a84a; border-color: #4dff88; color: #fff; font-weight: bold; font-size: 18px; padding: 8px 20px; }
+  #go:disabled { opacity: 0.6; cursor: default; }
+</style>
+</head>
+<body>
+<a class="back" href="../music.html">← 🎼 Music</a>
+<h1>CONDUCTOR</h1>
+<div id="bar"></div>
+<div class="setup">
+  <label>Piece <select id="piece"></select></label>
+  <label>Level <select id="difficulty"><option value="easy">Easy — banners tell you what's next</option>
+    <option value="medium">Medium — read the cue lane</option></select></label>
+  <button id="go">Take the podium</button>
+  <button id="rec" title="The orchestra plays at the marked tempo while your motion is recorded, then a file is saved for tuning">Record practice</button>
+  <button id="save" hidden title="Saves your motion, the beats the game detected and what the orchestra did, for tuning">Save last run</button>
+</div>
+<canvas id="stage" width="960" height="540"></canvas>
+<div class="scores"><h3>GLOBAL TOP 10 — CONDUCTOR</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<!-- bump ?v= on the scripts above with every change, so browsers don't mix a new page with old cached scripts -->
+<p class="help">Wear the MUGIC on your conducting hand, point it at the middle of the orchestra (the violas) and
+  click Calibrate center. Raise your hand and hold it still: the orchestra gets ready. Each beat is a down-and-up dip
+  of the hand — the bottom of the dip is where the orchestra plays; bigger beats play louder. Give a preparatory
+  beat, then the downbeat: the orchestra comes in on the downbeat at the tempo of those two beats (within ±40% of the
+  marked tempo), and then follows you. To cue a section, point at it ON its entry beat — swing toward it, or, if you
+  already face it, dip lower than usual (Easy counts you in, shows a gold arrow and turns your beam green on target);
+  a cue a beat or two early or late confuses them. Miss a cue and that section comes in timid.
+  At the end, hold the last chord (the fermata) as long as you like, then cut it off with a flick.
+  If your dips don't register, lower "Smallest beat" or set "Beat from" to flick.
+  Record practice plays the piece at its marked tempo and saves your motion to a file (for tuning the game).
+  Keyboard (practice, not posted): space beats, ← → or 1–5 point at a section, ↑ ↓ bigger / smaller beats.</p>
+
+<script src="../common/mugic.js"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script src="pieces.js?v=17"></script>
+<script src="audio.js?v=17"></script>
+<script src="beat.js?v=17"></script>
+<script src="stage.js?v=17"></script>
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
+const mean = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
+const median = a => a.length ? [...a].sort((x, y) => x - y)[a.length >> 1] : 0;
+
+// defaults from a recorded player: quiet beats are 35-45° dips of the hand, loud ones 100-120°
+const opts = { difficulty: 'easy', mode: 'dip', minDip: 10, full: 80 };   // full: the loudest beat, well short of vertical
+const OPTS_KEY = 'mugicConductorOpts3';   // bump when the defaults change, to drop stale saved ones
+try { Object.assign(opts, JSON.parse(localStorage.getItem(OPTS_KEY)) || {}); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(OPTS_KEY, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'space, ← →, ↑ ↓',
+  axes: ['yaw', 'pitch'],
+  extraRows: [
+    ['Beat from', `<select id="mode"><option value="dip">dip of the hand</option><option value="flick">flick</option></select>`, 'modeVal'],
+    ['Smallest beat', `<input type="range" id="minDip" min="2" max="30" value="${opts.minDip}">`, 'minDipVal'],
+    ['Loudest beat', `<input type="range" id="full" min="30" max="150" value="${opts.full}">`, 'fullVal'],
+  ],
+});
+const bindOpt = (id, num, fmt = v => v) => {
+  const e = $(id); e.value = opts[id];
+  const show = () => { const v = $(id + 'Val'); if (v) v.textContent = fmt(opts[id]); };
+  e.oninput = () => { opts[id] = num ? +e.value : e.value; Beat.mode = opts.mode; Beat.minDip = opts.minDip; saveOpts(); show(); };
+  show();
+};
+bindOpt('mode', false, () => ''); bindOpt('minDip', true, v => v + '°'); bindOpt('full', true, v => v + '°'); bindOpt('difficulty', false);
+Beat.mode = opts.mode; Beat.minDip = opts.minDip;
+
+let piece = PIECES.list[0];
+$('piece').innerHTML = PIECES.list.map(p => `<option value="${p.id}">${p.composer} — ${p.title}</option>`).join('');
+$('piece').onchange = e => {
+  piece = PIECES.list.find(p => p.id === e.target.value);
+  Orchestra.releaseAll(0.3); newRun(); Object.assign(game, { state: 'title', recording: false }); $('go').textContent = 'Take the podium';
+};
+const cv = $('stage'), ctx = cv.getContext('2d');
+const section = id => piece.sections.find(s => s.id === id);
+const SWING = 15, LOWER = 12;   // a cue: a beat swung ≥15° away from where you've been beating, or dipped ≥12° below
+                                // the shallowest of your last beats (a gradual lowering doesn't count)
+const NEAR = 2;                 // a cue gesture this many beats off a section's entry confuses it
+const RANGE = 0.4;       // the orchestra follows tempos within ±40% of the marked one, no further
+
+const game = { state: 'title', banner: null, flash: null, beats: [], keyboard: false, report: null };
+const sec = {};
+let kbYaw = 0, kbSize = 18;
+
+function newRun(fromBeat = 0) {
+  Object.assign(game, { state: 'ready', startBeat: fromBeat, report: null, flash: null, armed: false, tooFast: 0 });
+  if (fromBeat === 0) {
+    if (game.log && game.log.beats.some(b => b.pos != null)) game.prevLog = game.log;   // the run just finished stays saveable
+    game.log = { kind: 'run', piece: piece.id, settings: { ...Mugic.settings, ...opts }, cues: piece.cues, sections: piece.sections.map(s => ({ id: s.id, yaw: s.yaw })),
+      samples: [], beats: [], flicks: [], beatTimes: [], events: [] };   // a log of every run, saved with "Save last run"
+    Object.assign(game, { cueState: piece.cues.map(() => 'pending'), cueTry: piece.cues.map(() => null), bottoms: [], falseCues: 0, stops: 0, keyboard: !Mugic.connected,
+      stats: { dev: [], bpm: [], dyn: [], together: [], gestures: [] }, level: PIECES.target(piece, 0), unsteady: 0 });
+    for (const s of piece.sections) sec[s.id] = { glow: 0, flash: 0, conf: 1, lift: 0, bow: 0, playing: false, unsure: false, notes: [] };
+  }
+  game.next = Object.fromEntries(piece.sections.map(s => [s.id, piece.parts[s.id].findIndex(n => n[0] >= fromBeat)]));
+}
+const pos = () => ['play', 'hold'].includes(game.state) ? Math.min(Orchestra.beatAt(Orchestra.now()), piece.fermata)
+  : game.state === 'done' ? piece.fermata : game.state === 'title' ? -2 : (game.startBeat || 0) - (game.state === 'prep' ? 1 : 2);
+const toAudio = t => Orchestra.now() - (performance.now() / 1000 - t);
+const sizeLevel = size => clamp(0.12 + 0.88 * (size - opts.minDip) / Math.max(1, opts.full - opts.minDip), 0.08, 1);
+const flash = (text, kind, secs = 1.6, sub) => {
+  game.flash = { text, sub, [kind]: true, until: performance.now() / 1000 + secs };
+  if (game.log) game.log.events.push([+(performance.now() / 1000).toFixed(3), text + (sub ? ' — ' + sub : '')]);
+};
+// every detected beat, with what the game made of it (state, the orchestra's position, the cue gesture read)
+function logBeat(e, ta, state) {
+  if (!game.log) return;
+  game.log.beats.push({ t: +e.t.toFixed(3), size: +e.size.toFixed(1), bottom: +(e.bottom ?? 0).toFixed(1), yaw: +e.yaw.toFixed(1), state,
+    pos: ['play', 'hold'].includes(state) ? +Orchestra.beatAt(ta).toFixed(2) : null });
+}
+const bps = (b = pos()) => PIECES.tempoAt(piece, Math.max(0, b)) / 60;   // marked beats per second here
+const marked = (b = pos()) => Math.round(PIECES.tempoAt(piece, Math.max(0, b)));
+const clampRate = (want, cur) => clamp(clamp(want, cur * 0.6, cur * 1.6), bps() * (1 - RANGE), bps() * (1 + RANGE));
+const where = yaw => yaw < -45 ? 'far left' : yaw < -8 ? 'left' : yaw < 22 ? 'to the middle' : yaw < 58 ? 'right' : 'far right';
+const nearest = yaw => piece.sections.reduce((a, s) => Math.abs(yaw - s.yaw) < Math.abs(yaw - a.yaw) ? s : a);
+const yawNow = () => Mugic.connected ? Mugic.yaw : kbYaw;
+
+// ---------- practice recording: the piece at the marked tempo, your motion saved to a file ----------
+const COUNT_IN = 4;
+async function startRecording() {
+  await Orchestra.load(piece, f => { game.progress = f; });
+  Orchestra.resume(); Orchestra.releaseAll(0.3);
+  newRun();
+  const t0 = Orchestra.now() + 0.5;
+  const BPS = bps(0);
+  for (let k = 0; k < COUNT_IN; ++k) Orchestra.click(t0 + k / BPS, k === 0);
+  Orchestra.startAt(-COUNT_IN, t0, BPS);
+  game.rec = { piece: piece.id, tempo: piece.tempo, meter: piece.meter, settings: { ...Mugic.settings, ...opts },
+    // score beat b happened at performance time perfAtBeat0 + b / beatsPerSecond (seconds)
+    perfAtBeat0: performance.now() / 1000 - Orchestra.now() + t0 + COUNT_IN / BPS, beatsPerSecond: BPS,
+    beatTimes: [],   // [beat, performance time] of each score beat (the tempo may change during the piece)
+    cues: piece.cues.map(c => ({ ...c, yaw: section(c.section).yaw })), sections: piece.sections.map(s => ({ id: s.id, yaw: s.yaw })),
+    samples: [], detected: [], flicks: [] };
+  Object.assign(game, { state: 'play', recording: true, lastBeat: Orchestra.now(), smoothIv: 1 / BPS, level: PIECES.target(piece, 0) });
+}
+// save `data` as conductor-<kind>-<piece>-<local date and time>.json in Downloads
+function download(kind, data) {
+  const d = new Date(), pad = n => String(n).padStart(2, '0');
+  const name = `conductor-${kind}-${data.piece}-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+  a.download = name; a.click();
+  flash(`Saved ${name} to your Downloads`, 'ok', 6);
+}
+function saveRecording() {
+  if (!game.recording) return;
+  Orchestra.releaseAll(0.4);
+  Object.assign(game, { state: 'title', recording: false });
+  download('practice', game.rec);
+}
+function saveRun() {
+  if (game.recording) return saveRecording();
+  const played = L => L && L.beats.some(b => b.pos != null);
+  const L = played(game.log) ? game.log : played(game.prevLog) ? game.prevLog : game.log;
+  if (L && L.samples.length) download('run', L);
+}
+
+// ---------- beats ----------
+Beat.onIgnore = e => {   // dips the detector did not count as beats, kept in the run log / practice file for tuning
+  const L = game.recording ? game.rec : game.log, x = { t: +e.t.toFixed(3), size: +e.size.toFixed(1), bottom: +e.bottom.toFixed(1), why: e.why };
+  if (L) (L.ignored = L.ignored || []).push(x);
+};
+Beat.onBeat = e => {
+  if (Scores.busy()) return;
+  if (game.recording) { game.rec.detected.push({ t: +e.t.toFixed(3), size: +e.size.toFixed(1), yaw: +e.yaw.toFixed(1) }); game.beats.push({ t: e.t }); return; }
+  const ta = toAudio(e.t), lvl = sizeLevel(e.size), before = game.state;
+  game.beats.push({ t: e.t }); if (game.beats.length > 8) game.beats.shift();
+  logBeat(e, ta, before);
+  switch (game.state) {
+    case 'ready':   // only a beat from the still, raised hand counts as the preparatory beat
+      if (game.armed) Object.assign(game, { state: 'prep', prep: ta, level: lvl });
+      break;
+    case 'prep': {
+      const iv = ta - game.prep;
+      if (iv * bps(game.startBeat) < 0.6 || iv * bps(game.startBeat) > 1.6) { game.prep = ta; break; }   // not a plausible beat apart: start over from this one
+      Orchestra.resume();
+      Orchestra.startAt(game.startBeat, ta, clampRate(1 / iv, 1 / iv));
+      Object.assign(game, { state: 'play', lastBeat: ta, smoothIv: 1 / Orchestra.rate, level: lvl, count: game.startBeat, kbPoint: null });
+      piece.cues.forEach((c, i) => { if (c.beat === game.startBeat && game.cueState[i] === 'pending') hitCue(i); });   // the downbeat cues them
+      break;
+    }
+    case 'play': follow(ta, e, lvl); break;
+    case 'hold': if (Orchestra.now() - game.holdStart > 0.6) cutoff(); break;
+    case 'done': if (performance.now() / 1000 > game.doneAt + 2.5) newRun(); break;
+  }
+};
+Mugic.onFlick = () => {
+  const t = performance.now() / 1000;
+  if (game.recording) { game.rec.flicks.push(+t.toFixed(3)); if (game.state === 'hold' && Orchestra.now() - game.holdStart > 0.6) saveRecording(); return; }
+  if (game.log) game.log.flicks.push(+t.toFixed(3));
+  Beat.flick(t); if (game.state === 'hold' && Orchestra.now() - game.holdStart > 0.6) cutoff(); };
+
+// The tempo follower. Each ictus is the next beat (counted, so an orchestra running behind still knows which beat you
+// gave; re-synced to the nearest beat only if the count drifts more than a beat off). It steers the orchestra to land
+// that beat's successor one (smoothed) beat after this ictus. A long gap is a deliberate wait, not unsteadiness.
+function follow(ta, e, lvl) {
+  const p = Orchestra.beatAt(ta), iv = ta - game.lastBeat;
+  let n = game.count + 1;
+  if (Math.abs(p - n) > 1) n = Math.round(p);
+  game.count = n; game.lastBeat = ta;
+  game.stats.together.push(Math.min(1, Math.abs(p - n)));
+  if (iv > 0.3 && iv < 1.4 * game.smoothIv) {
+    const dev = Math.max(0, Math.abs(iv - game.smoothIv) / game.smoothIv - 0.08);   // ±8% is human, not unsteady
+    game.stats.dev.push(Math.min(1, dev));
+    game.unsteady = 0.7 * game.unsteady + 0.3 * Math.min(0.5, dev);
+  }
+  if (iv > 0.3 && iv < 2.5) game.smoothIv = 0.4 * game.smoothIv + 0.6 * clamp(iv, 1 / (bps() * (1 + RANGE)), 1 / (bps() * (1 - RANGE)));
+  const now = Orchestra.now(), left = Math.max(0.15, ta + game.smoothIv - now);
+  Orchestra.setRate(clampRate((n + 1 - Orchestra.beatAt(now)) / left, Orchestra.rate));
+  game.stats.bpm.push(60 / game.smoothIv);
+  const ratio = iv > 0.3 && iv < 2.5 ? 1 / (iv * bps()) : 1;   // your own tempo, before the orchestra's limits
+  game.tooFast = ratio > 1 + RANGE + 0.05 ? 1 : ratio < 1 - RANGE - 0.05 ? -1 : 0;
+  game.level = 0.5 * game.level + 0.5 * lvl;
+  game.stats.dyn.push(Math.abs(game.level - PIECES.target(piece, p)));
+  const g = cueGesture(e);
+  game.stats.gestures.push([n, g]);
+  if (game.log) Object.assign(game.log.beats[game.log.beats.length - 1], { count: n, cue: g });
+  if (g) judgeCue(g, n);
+}
+
+// Which section (if any) this beat cues: a swing of the stroke ≥ SWING° away from where you've been beating (the
+// section nearest the swing), or, facing a section already, a dip ≥ LOWER° below your recent beats' bottoms.
+function cueGesture(e) {
+  if (game.keyboard) { const k = game.kbPoint; game.kbPoint = null; return k; }
+  const H = Beat.history, med = a => median(a.map(s => s.yaw));
+  const before = H.filter(s => s.t >= e.t - 2.5 && s.t <= e.t - 0.6), stroke = H.filter(s => s.t >= e.t - 0.3 && s.t <= e.t + 0.05);
+  const bottoms = game.bottoms.slice(-4);
+  game.bottoms.push(e.bottom);
+  if (!before.length || !stroke.length) return null;
+  const rest = med(before), peak = stroke.reduce((a, s) => Math.abs(s.yaw - rest) > Math.abs(a.yaw - rest) ? s : a);
+  if (Math.abs(peak.yaw - rest) >= SWING) return nearest(peak.yaw).id;
+  if (bottoms.length >= 3 && e.bottom <= Math.min(...bottoms) - LOWER) return nearest(rest).id;
+  return null;
+}
+
+// A cue on the entry beat brings the section in; one a beat or two off confuses it (and costs points).
+function judgeCue(id, n) {
+  const i = piece.cues.findIndex(c => c.section === id && Math.abs(c.beat - n) <= NEAR), s = section(id);
+  piece.cues.forEach((c, k) => { if (c.beat === n && game.cueState[k] === 'pending') game.cueTry[k] = { id, n }; });
+  if (i < 0) return;
+  const c = piece.cues[i];
+  if (c.beat === n) { if (game.cueState[i] === 'pending') hitCue(i); return; }
+  if (c.beat === 0) return;   // the opening section is cued by the downbeat; looking at them after is fine
+  ++game.falseCues; sec[id].conf = Math.min(sec[id].conf, 0.6);
+  if (game.cueState[i] === 'pending') game.cueTry[i] = { id, n };
+  flash(`${s.name}: ${n < c.beat ? 'not yet!' : "we're already in!"}`, 'bad', 1.5);
+}
+
+const inWindow = (c, p) => p >= c.beat - 1 && p <= c.beat + 0.5;   // the beat that should carry the cue is coming / here
+function hitCue(i) {
+  const s = section(piece.cues[i].section);
+  game.cueState[i] = 'hit'; sec[s.id].conf = 1; sec[s.id].flash = 1;
+  flash(`${s.name} in ✓`, 'ok', 1.2);
+}
+// why a cue was missed: nothing on the beat, the wrong section, or the right one on the wrong beat
+function missText(i) {
+  const c = piece.cues[i], s = section(c.section), tr = game.cueTry[i];
+  const sub = !tr ? `cue them ON their entry beat: point ${where(s.yaw)} at them (or dip lower if you already face them)`
+    : tr.id !== s.id ? `you cued the ${section(tr.id).name}; the ${s.name} are ${s.yaw < section(tr.id).yaw ? 'further left' : 'further right'}`
+    : `you cued them ${tr.n < c.beat ? 'early' : 'late'} — exactly on their entry beat`;
+  return { text: `${s.name} came in unsure`, sub };
+}
+
+function cutoff() {
+  if (game.state !== 'hold') return;
+  const held = (Orchestra.now() - game.holdStart) * Orchestra.rate;
+  Orchestra.releaseAll(0.25);
+  Object.assign(game, { state: 'done', doneAt: performance.now() / 1000 });
+  setTimeout(() => finish(held), 1200);
+}
+
+function finish(held) {
+  const st = game.stats, nc = piece.cues.length;
+  const hits = game.cueState.filter(s => s === 'hit').length;
+  const missed = piece.cues.filter((c, i) => game.cueState[i] !== 'hit').map(c => section(c.section).name);
+  const steady = clamp01(1 - mean(st.dev) / 0.25), bpm = median(st.bpm) || piece.tempo;
+  const together = clamp01(1 - mean(st.together) / 0.35), dyn = clamp01(1 - mean(st.dyn) * 2.5);
+  const end = clamp01(held / 2);
+  const points = Math.round(1000 * clamp01(0.3 * hits / nc + 0.15 * steady + 0.2 * together + 0.2 * dyn + 0.15 * end - 0.1 * game.stops - 0.04 * game.falseCues));
+  const pct = v => Math.round(v * 100) + '%';
+  game.report = {
+    points, stars: Math.max(1, Math.ceil(points / 200)),
+    verdict: points >= 900 ? 'Bravo, maestro!' : points >= 700 ? 'Standing ovation' : points >= 500 ? 'Warm applause'
+      : points >= 300 ? 'Polite applause' : 'The orchestra is confused',
+    lines: [
+      `Cues: ${hits}/${nc}${missed.length ? ' — missed ' + missed.join(', ') : ' — every entry in time'}${game.falseCues ? ` · ${game.falseCues} confusing cue${game.falseCues > 1 ? 's' : ''}` : ''}`,
+      `Together with the orchestra ${pct(together)} · steadiness ${pct(steady)} · ♩ = ${Math.round(bpm)} (marked ${piece.tempos ? piece.tempos[0][1] + '→' + piece.tempos[piece.tempos.length - 1][1] : piece.tempo})`,
+      `Dynamics: ${pct(dyn)} match with the score`,
+      `Fermata held ${held.toFixed(1)} beats${held >= 2 ? ', clean cutoff' : ' — hold it longer'}`,
+      ...(game.stops ? [`The orchestra stopped ${game.stops}× — keep beating`] : []),
+    ],
+  };
+  Orchestra.applause(points / 1000);
+  if (!game.keyboard && Mugic.connected) Scores.submit({ game: 'conductor', score: points }).then(showBoard);
+}
+const showBoard = () => Scores.top('conductor').then(rows => Scores.render($('board'), rows));
+showBoard();
+
+// ---------- the score clock: schedule notes, follow cues, lose the orchestra if the beat stops ----------
+function update(dt) {
+  if (!['play', 'hold'].includes(game.state)) return;
+  const now = Orchestra.now(), p = pos();
+  if (!game.recording && game.log && p >= 0) {   // when each score beat sounded, for lining up the run log
+    const k = Math.floor(p), bt = game.log.beatTimes;
+    if (!bt.length || bt[bt.length - 1][0] < k) bt.push([k, +(performance.now() / 1000 - (now - Orchestra.timeOf(k))).toFixed(3)]);
+  }
+  if (game.recording && game.state === 'play' && p >= 0) {
+    Orchestra.setRate(bps(p));
+    const k = Math.floor(p), r = game.rec;
+    if (!r.beatTimes.length || r.beatTimes[r.beatTimes.length - 1][0] < k)
+      r.beatTimes.push([k, +(performance.now() / 1000 - (now - Orchestra.timeOf(k))).toFixed(3)]);
+  }
+  if (game.recording) {
+    const m = Mugic;
+    game.rec.samples.push([+(performance.now() / 1000).toFixed(3), +m.pitch.toFixed(1), +m.yaw.toFixed(1), +m.roll.toFixed(1), Math.round(m.energy)]);
+  }
+  if (game.state === 'play') {
+    const quiet = game.recording ? 0 : now - game.lastBeat;
+    if (quiet > 6 * game.smoothIv) {   // nobody is conducting: the orchestra stops
+      Orchestra.releaseAll(0.6); ++game.stops;
+      newRun(Math.floor(p / piece.meter) * piece.meter);
+      flash('The orchestra stopped', 'bad', 2);
+      return;
+    }
+    if (quiet > 2.5 * game.smoothIv) Orchestra.setRate(Math.max(bps() * 0.5, Orchestra.rate * (1 - 0.5 * dt)));   // waits for you
+    if (Orchestra.beatAt(now) >= piece.fermata) Object.assign(game, { state: 'hold', holdStart: Math.max(now, Orchestra.timeOf(piece.fermata)) });
+    piece.cues.forEach((c, i) => {
+      if (game.recording || game.cueState[i] !== 'pending' || p <= c.beat + 0.6) return;
+      const s = section(c.section);
+      game.cueState[i] = 'miss'; sec[s.id].conf = 0.35;
+      const m = missText(i); flash(m.text, 'bad', 3, m.sub);
+    });
+    const horizon = Math.min(Orchestra.beatAt(now + 0.15), piece.fermata + 0.01);
+    for (const s of piece.sections) {
+      const notes = piece.parts[s.id], jitter = (Math.random() * 2 - 1) * game.unsteady * 0.08;
+      let i = game.next[s.id];
+      while (i >= 0 && i < notes.length && notes[i][0] < horizon) {
+        const [b, m, d, inst] = notes[i++], t = Math.max(now, Orchestra.timeOf(b) + jitter);
+        const secs = b >= piece.fermata ? Infinity : d / Orchestra.rate + 0.03;
+        Orchestra.note(s.id, m, t, secs, 0.8, inst);
+        sec[s.id].notes.push({ t, end: t + secs });
+      }
+      game.next[s.id] = i;
+    }
+  } else if (game.recording ? now - game.holdStart > 3 / bps() : now - game.holdStart > 12) {
+    if (game.recording) saveRecording(); else cutoff();
+  }
+  for (const s of piece.sections) {
+    const st = sec[s.id];
+    st.conf = Math.min(1, st.conf + dt * 0.08);
+    Orchestra.level(s.id, game.recording ? PIECES.target(piece, Math.max(0, p)) : game.level * st.conf);
+  }
+}
+
+// ---------- animation state for the stage ----------
+// the next entry to cue, if it is due within 8 beats (Easy shows it on stage)
+const nextCue = p => piece.cues.find((c, i) => game.cueState?.[i] === 'pending' && c.beat - p <= 8 && c.beat > game.startBeat - 0.5
+  && ['play', 'ready', 'prep'].includes(game.state) && !(c.beat === game.startBeat && game.state !== 'play'));
+
+function animate(dt) {
+  const now = Orchestra.now(), p = pos(), yaw = Mugic.connected ? Mugic.yaw : kbYaw;
+  if (game.state === 'ready' && !game.armed) game.armed = game.keyboard || Beat.still(performance.now() / 1000, 0.6, 3);
+  const cue = opts.difficulty === 'easy' ? nextCue(p) : null, pulse = 0.5 + 0.5 * Math.sin(performance.now() / 160);
+  for (const s of piece.sections) {
+    const st = sec[s.id]; if (!st) continue;
+    while (st.notes.length > 1 && st.notes[1].t <= now) st.notes.shift();
+    const n = st.notes[0], playing = !!n && now >= n.t && now < n.end && ['play', 'hold'].includes(game.state);
+    if (n && playing) {
+      const prog = clamp01((now - n.t) / Math.min(n.end - n.t, 2));
+      if (n.dir === undefined) n.dir = st.dirFlip = !st.dirFlip;   // alternate up- and down-bows
+      st.bow = n.dir ? prog : 1 - prog;
+    }
+    st.playing = playing;
+    const nextNote = piece.parts[s.id][game.next[s.id]];
+    const soon = playing || (nextNote && nextNote[0] - p < 2.5 && game.state !== 'title');
+    st.lift += ((soon ? 1 : 0) - st.lift) * Math.min(1, dt * 4);
+    st.unsure = st.conf < 0.7 && playing;
+    st.flash = Math.max(0, st.flash - dt * 0.8);
+    const pointed = nearest(yaw).id === s.id && (Mugic.connected || game.keyboard);
+    const target = cue && cue.section === s.id ? 0.35 + 0.5 * pulse : 0;
+    st.glow += (Math.max(pointed ? 0.45 : 0, target) + st.flash - st.glow) * Math.min(1, dt * 8);
+  }
+}
+
+function currentBanner(p) {
+  const t = performance.now() / 1000;
+  if (game.flash && t < game.flash.until) return game.flash;
+  const easy = opts.difficulty === 'easy';
+  if (game.state === 'play' && p > piece.fermata - 4 && p < piece.fermata)
+    return { text: `Last chord in ${Math.ceil(piece.fermata - p)}…`, sub: 'hold it as long as you like, then cut off with a flick' };
+  if (game.recording) {
+    if (p < 0) return { text: `Count-in: ${Math.ceil(-p)}…`, sub: 'conduct along naturally — point at each section when it comes in' };
+    const c = piece.cues.find(c => c.beat - p > -1 && c.beat - p <= 4);
+    if (c) return { text: `Recording — point ${where(section(c.section).yaw)} at the ${section(c.section).name}`, sub: `they come in at bar ${c.beat / piece.meter + 1}` };
+    return { text: '● Recording your motion', sub: game.state === 'hold' ? 'hold the last chord, then a small cutoff' : 'beat as you normally would; bigger where it gets louder', bad: true };
+  }
+  switch (game.state) {
+    case 'title': return { text: 'Choose a piece and press “Take the podium”' };
+    case 'loading': return game.loadError ? { text: 'Could not load the instruments — press the button to try again', sub: game.loadError, bad: true }
+      : { text: `Tuning up… ${Math.round(game.progress * 100)}%` };
+    case 'ready': {
+      const from = game.startBeat ? `From bar ${game.startBeat / piece.meter + 1}: ` : '';
+      if (!game.armed) return { text: from + 'Raise your hand and hold it still', sub: 'the orchestra watches you, ready to play' };
+      return { text: 'Ready — give a preparatory beat, then the downbeat', sub: `about ♩ = ${marked(game.startBeat)} · the score at the bottom ▼ shows every entry to cue` };
+    }
+    case 'prep': return { text: '…and the downbeat!' };
+    case 'hold': return easy ? { text: 'Hold the chord… then cut off with a flick' } : null;
+    case 'play': {
+      if (game.tooFast) return { text: game.tooFast > 0 ? 'Too fast — the orchestra can\'t go faster' : 'Too slow — the orchestra can\'t go slower',
+        sub: `they stay within ♩ = ${Math.round(marked() * (1 - RANGE))}–${Math.round(marked() * (1 + RANGE))} here`, bad: true };
+      if (!easy) return null;
+      const soon = piece.cues.filter((c, k) => game.cueState[k] === 'pending' && c.beat - p <= 8 && c.beat > p - 0.5);
+      if (soon.length > 1 && soon[0].beat - p > 2)   // entries close together: read them off the score
+        return { text: 'Coming up: ' + soon.map(c => `${section(c.section).name} (bar ${c.beat / piece.meter + 1})`).join(' · '),
+                 sub: '▼ watch the score below: cue each one on its bar' };
+      const c = nextCue(p);
+      if (c) {
+        const s = section(c.section), now = inWindow(c, p), left = Math.ceil(c.beat - p);
+        const how = `point ${where(s.yaw)} at them on that beat — or dip lower if you already face them`;
+        return now ? { text: left <= 0 ? `NOW — cue the ${s.name}!` : `Cue the ${s.name} on the next beat!`, sub: how }
+          : { text: `Cue the ${s.name} on beat 1 of bar ${c.beat / piece.meter + 1} — in ${left}…`, sub: 'not before, not after: exactly on their entry beat' };
+      }
+      const pin = piece.hairpins.find(h => h.from - p <= 4 && h.to > p);
+      if (pin) return { text: pin.kind === 'cresc' ? 'Getting louder: bigger and bigger beats' : 'Getting softer: smaller beats' };
+
+      return null;
+    }
+  }
+  return null;
+}
+
+// ---------- input ----------
+const yawOf = i => piece.sections[clamp(i, 0, piece.sections.length - 1)].yaw;
+let kbIndex = 2;
+addEventListener('keydown', e => {
+  if (Scores.busy() || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat && game.state !== 'title' && game.state !== 'loading') { game.keyboard = true; Beat.tap(performance.now() / 1000, kbSize, Mugic.connected ? Mugic.yaw : kbYaw); } }
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); kbIndex = clamp(kbIndex + (e.key === 'ArrowLeft' ? -1 : 1), 0, piece.sections.length - 1); kbPoint(); }
+  else if (/^[1-9]$/.test(e.key) && +e.key <= piece.sections.length) { kbIndex = +e.key - 1; kbPoint(); }
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); kbSize = clamp(kbSize + (e.key === 'ArrowUp' ? 4 : -4), opts.minDip, opts.full); }
+});
+kbYaw = yawOf(kbIndex);
+function kbPoint() { kbYaw = yawOf(kbIndex); game.kbPoint = piece.sections[kbIndex].id; game.keyboard = true; }   // cues on the next beat
+
+// run `fn` with the buttons disabled while the samples load; a load failure is shown instead of hanging
+async function withLoading(fn) {
+  ['go', 'rec', 'piece'].forEach(id => { $(id).disabled = true; });
+  Object.assign(game, { state: 'loading', progress: 0, loadError: null });
+  try { await fn(); } catch (err) { Object.assign(game, { state: 'loading', loadError: err.message }); }
+  ['go', 'rec', 'piece'].forEach(id => { $(id).disabled = false; });
+}
+$('save').onclick = saveRun;
+$('rec').onclick = () => {
+  if (!Mugic.connected && !confirm('No MUGIC connected — record anyway (keyboard only)?')) return;
+  withLoading(startRecording);
+};
+$('go').onclick = () => withLoading(async () => {
+  game.recording = false;
+  await Orchestra.load(piece, f => { game.progress = f; });
+  Orchestra.resume(); Orchestra.releaseAll(0.3);
+  newRun();
+  $('go').textContent = 'Start over';
+});
+
+// ---------- main loop ----------
+newRun(); game.state = 'title';
+let last = performance.now();
+(function frame() {
+  const tNow = performance.now(), dt = Math.min(0.1, (tNow - last) / 1000); last = tNow;
+  if (Mugic.connected) Beat.sample(tNow / 1000, Mugic.pitch, Mugic.yaw);
+  const L = game.log, live = !['title', 'loading'].includes(game.state) && !game.recording;
+  if (L && live && Mugic.connected && L.samples.length < 60000) {   // the motion, once per new MUGIC reading
+    const s = [+(tNow / 1000).toFixed(3), +Mugic.pitch.toFixed(1), +Mugic.yaw.toFixed(1), +Mugic.roll.toFixed(1), Math.round(Mugic.energy)];
+    const last = L.samples[L.samples.length - 1];
+    if (!last || last[1] !== s[1] || last[2] !== s[2]) L.samples.push(s);
+  }
+  $('save').hidden = !(game.recording || (L && L.samples.length));
+  $('save').textContent = game.recording ? 'Save recording' : 'Save last run';
+  update(dt); animate(dt);
+  const p = pos();
+  Stage.draw(ctx, {
+    piece, pos: p, t: tNow / 1000, now: tNow / 1000, sections: sec, yaw: Mugic.connected ? Mugic.yaw : kbYaw,
+    pointing: Mugic.connected || game.keyboard, history: Beat.history, beats: game.beats,
+    cueTarget: opts.difficulty === 'easy' && nextCue(p) ? section(nextCue(p).section) : null,
+    onTarget: !!nextCue(p) && nearest(Mugic.connected ? Mugic.yaw : kbYaw).id === nextCue(p).section,
+    banner: currentBanner(p), cueState: game.cueState || piece.cues.map(() => 'pending'),
+    bpm: game.smoothIv ? 60 / game.smoothIv : marked(), marked: marked(), level: game.level ?? 0, target: PIECES.target(piece, Math.max(0, p)),
+    report: game.report,
+  });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
