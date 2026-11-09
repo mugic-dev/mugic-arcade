@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Music</title>
+<link rel="stylesheet" href="common/arcade.css">
+<style>
+  .pieces { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; width: min(1040px, 100%); margin-top: 10px; }
+  .pieces a { display: block; background: var(--panel); border: 1px solid #2a3040; border-radius: 8px; padding: 16px; text-decoration: none; color: var(--fg); }
+  .pieces a:hover { border-color: var(--acc); }
+  .pieces h2 { margin: 0 0 6px; font-size: 18px; color: var(--acc); }
+  .pieces p { margin: 0; color: var(--dim); }
+  .pieces img { display: block; width: 100%; height: 150px; object-fit: cover; border-radius: 4px; margin-bottom: 10px; background: #000; }
+</style>
+</head>
+<body>
+<h1>MUGIC MUSIC</h1>
+<div class="pieces">
+  <a href="conductor/"><img src="shots/conductor.webp" alt="">
+    <h2>Conductor</h2>
+    <p>Conduct a sampled orchestra (Pachelbel, Beethoven, Strauss, Grieg): your beat sets the tempo, its size the
+      dynamics; cue each section on its entry.</p></a>
+</div>
+<p class="help">Needs a MUGIC in BLE output mode (firmware ≥ 2.2.0) and Chrome or Edge on a computer or Android
+  (iPhone/iPad browsers have no Web Bluetooth). Also plays with the keyboard.</p>
+</body>
+</html>

@@ -24,6 +24,5 @@ const GAMES = [
   { id: 'bowling', name: 'Bowling', blurb: 'Point to aim, twist for hook, swing and flick to bowl. Ten frames, real scoring.' },
   { id: 'slalom', name: 'Slalom', blurb: 'Downhill skiing: roll to carve through the gates, tip forward to tuck, flick to jump. Fastest time wins.', board: 'FASTEST', timed: true },
   { id: 'marble', name: 'Marble Rush', blurb: 'Marble Madness-style: tilt the MUGIC to race the marble down isometric courses against the clock.' },
-  { id: 'conductor', name: 'Conductor', blurb: 'Conduct a sampled orchestra (Pachelbel, Beethoven, Strauss, Grieg): your beat sets the tempo, its size the dynamics; cue each section on its entry.' },
   { id: 'sokoban', name: 'Warehouse', short: 'WAREHOUSE HARD', blurb: 'Flick left/right/up/down to step and push crates, undo with a button.', board: 'LEVEL RECORDS', levels: 25 },
 ];

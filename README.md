@@ -32,9 +32,14 @@ It is served by GitHub Pages straight from `main` (repo root): a push to `main` 
 | Slalom (downhill skiing) | `slalom/` | **Roll** carves (sharper with more tilt, and slower), tip **forward** to tuck, **back** to brake, **flick** jumps (clears rocks). Fixed course of 20 gates; a missed gate adds 5 s, trees/rocks/fence knock you down for 2 s. Ranked by time (lower is better; boards show m:ss.cc). Keyboard not ranked |
 | Marble Rush (Marble Madness style) | `marble/` | Tilt the MUGIC to roll the marble on an isometric course with ramps, ledges and slinkies; rolling off into the void or dropping more than 3 levels loses the marble back to the last checkpoint. 6 races (Practice, Beginner, Intermediate, Advanced, Expert, Impossible), leftover time carries over; 1000 × race + 100 per second left. Keyboard not ranked |
 | Warehouse (Sokoban style) | `sokoban/` | One **flick** = one step; its direction is the axis that turned most: **yaw** → left/right, **pitch** → up/down. Undo/Restart/Quit are on-screen buttons (U/R/Esc); Quit returns to the mode choice. **Hard** mode (chosen at start): no undo, only restart; only Hard scores are saved. `Min turn` sets how far it must turn; the snap back to center is ignored |
-| Conductor | `conductor/` | Each down-up **dip** of the hand (**pitch**) is a beat (or each **flick**); a still raised hand, then a preparatory beat + downbeat start the orchestra, which then follows your beat within ±40% of the marked tempo (Mountain King's marked tempo accelerates). The dip's height sets the dynamics (10° softest … 110° loudest). Cue a section **on its entry beat**: swing (**yaw**) ≥15° toward it, or, already facing it, dip ≥12° lower; a beat or two off confuses it. Hold the final fermata, cut off with a flick. Pieces: Canon in D, Ode to Joy, The Blue Danube (in one), In the Hall of the Mountain King. *Record practice* saves your motion against the score as JSON for tuning. Keyboard not ranked |
 
 Every game also plays with the keyboard.
+
+## Music (`music.html`, not on the arcade menu)
+
+| Piece | Folder | Controls |
+|---|---|---|
+| Conductor | `conductor/` | Each down-up **dip** of the hand (**pitch**) is a beat (or each **flick**); a still raised hand, then a preparatory beat + downbeat start the orchestra, which then follows your beat within ±40% of the marked tempo (Mountain King's marked tempo accelerates). The dip's height sets the dynamics (10° softest … 110° loudest). Cue a section **on its entry beat**: swing (**yaw**) ≥15° toward it, or, already facing it, dip ≥12° lower; a beat or two off confuses it. Hold the final fermata, cut off with a flick. Pieces: Canon in D, Ode to Joy, The Blue Danube (in one), In the Hall of the Mountain King. *Record practice* saves your motion against the score as JSON for tuning. Keyboard not ranked |
 
 **Conductor sound:** string, wind, brass and percussion samples from the [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE)
 (CC0), cut to small looped mono WAVs in `conductor/samples/` by `python3 conductor/tools/build_samples.py`
