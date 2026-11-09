@@ -19,9 +19,19 @@ const Beat = (() => {
   };
 
   // bottom: the lowest pitch of the stroke (a dip lower than usual is a cue for the section you already face)
+  // a small stroke soon after a beat is the rebound of that beat, not a beat: under 30% of your recent beat size,
+  // less than 3/4 of your recent beat interval after the last one
+  const recent = [];   // { t, size } of the last few beats
+  const med = a => [...a].sort((x, y) => x - y)[a.length >> 1];
+  function rebound(t, size) {
+    if (recent.length < 3) return false;
+    const ivs = recent.slice(1).map((r, i) => r.t - recent[i].t);
+    return size < 0.3 * med(recent.map(r => r.size)) && t - lastBeat < 0.75 * med(ivs);
+  }
   function fire(t, size, bottom) {
-    if (t - lastBeat < MIN_GAP) return;
+    if (t - lastBeat < MIN_GAP || rebound(t, size)) return;
     lastBeat = t;
+    recent.push({ t, size }); if (recent.length > 5) recent.shift();
     if (b.onBeat) b.onBeat({ t, size, bottom, yaw: yawOver(t - 0.45, t) });
   }
 
