@@ -189,11 +189,14 @@ const PIECES = (() => {
     const P2 = 'F#4:.5 G#4 A#4 B4 C#5 A#4 C#5:1 | D5:.5 A#4 D5:1 C#5:.5 A#4 C#5:1 | F#4:.5 G#4 A#4 B4 C#5 A#4 C#5:1 | D5:.5 A#4 D5:1 C#5:2';
     const tune = start => [...mel(start, P1), ...mel(start + 16, P2)];
     const H = start => chords(start, 'Bm:16 F#:16');
-    const w = bar(3), v = bar(11), t = bar(19), END = bar(27), FINAL = chords(END, 'Bm:4');
-    const low = [...chords(0, 'Bm:8'), ...H(w), ...H(v), ...H(t)];
+    // six statements of the theme (8 bars each), growing from bassoons alone to the full orchestra
+    const [w, v, x, y, z, q] = [3, 11, 19, 27, 35, 43].map(bar), END = bar(51), FINAL = chords(END, 'Bm:4');
+    const low = [...chords(0, 'Bm:8'), ...[w, v, x, y, z, q].flatMap(H)];
+    // the accelerando gathers speed: ♩ = 70 at the start, double (140) at the end, as 70·2^(x^1.8)
+    const tempos = Array.from({ length: END / 8 + 1 }, (_, i) => [8 * i, Math.round(70 * 2 ** ((8 * i / END) ** 1.8))]);
+    const stac = (notes, inst) => short(as(notes, inst), 0.4);
     return {
-      id: 'troll', title: 'In the Hall of the Mountain King', composer: 'Edvard Grieg', meter: 4, tempo: 70,
-      tempos: [[0, 70], [v, 84], [t, 104], [END, 128]], bars: 27,
+      id: 'troll', title: 'In the Hall of the Mountain King', composer: 'Edvard Grieg', meter: 4, tempo: 70, tempos, bars: 51,
       sections: [
         { id: 'vln', name: 'Violins', inst: 'vlnp', look: 'vln', players: 8 },
         { id: 'ww', name: 'Bassoons & Winds', inst: 'bns', look: 'ww', players: 4 },
@@ -201,17 +204,22 @@ const PIECES = (() => {
         { id: 'low', name: 'Cellos & Basses', inst: 'vcp', look: 'vc', players: 6 },
       ],
       parts: {
-        low: [...pulse(low, 35, 0, 2, [0], 1, 'cbp'), ...pulse(low, 54, 0, 2, [1], 1), ...roots(FINAL, 35, 'cbp'), ...pad(FINAL, 47)],
-        ww: [...up(tune(w), -12), ...up(tune(v), -12), ...short(as(up(tune(t), 12), 'ob'), 0.4), ...short(as(tune(t), 'cl'), 0.4),
-             ...pad(FINAL, 59, 1, 'cl')],
-        vln: [...tune(v), ...short(as(up(tune(t), 12), 'vln'), 0.4), ...pad(FINAL, 71, 2, 'vln')],
-        br: [...short(tune(t), 0.4), ...roots(H(t), 35, 'tb'), ...roots(H(t), 23, 'tu'),
-             ...hits(Array.from({ length: 16 }, (_, i) => t + 2 * i), 'timp'), ...hits([t, END], 'cym'),
-             ...roots(FINAL, 35, 'tb'), ...pad(FINAL, 59), ...hits([END], 'timp')],
+        low: [...pulse(low, 35, 0, 2, [0], 1, 'cbp'), ...pulse(low, 54, 0, 2, [1], 1),
+              ...[z, q].flatMap(s => pulse(H(s), 47, 0, 1, [0], 0.4, 'vc')), ...roots(FINAL, 35, 'cbp'), ...pad(FINAL, 47)],
+        ww: [...up(tune(w), -12), ...up(tune(v), -12),
+             ...[x, y, z, q].flatMap(s => [...stac(up(tune(s), 12), 'ob'), ...stac(tune(s), 'cl')]),
+             ...[z, q].flatMap(s => stac(up(tune(s), 24), 'fl')), ...pad(FINAL, 59, 1, 'cl'), ...pad(FINAL, 74, 2, 'fl')],
+        vln: [...tune(v), ...[x, y, z, q].flatMap(s => stac(up(tune(s), 12), 'vln')),
+              ...[z, q].flatMap(s => stac(tune(s), 'vln')), ...pad(FINAL, 71, 2, 'vln')],
+        br: [...stac(tune(y)), ...[z, q].flatMap(s => [...stac(tune(s)), ...stac(tune(s), 'tp')]),
+             ...[y, z, q].flatMap(s => [...roots(H(s), 35, 'tb'), ...roots(H(s), 23, 'tu')]),
+             ...hits(Array.from({ length: 16 }, (_, i) => z + 2 * i), 'timp'), ...hits(Array.from({ length: 32 }, (_, i) => q + i), 'timp'),
+             ...hits([z, q, END], 'cym'), ...roots(FINAL, 35, 'tb'), ...pad(FINAL, 59), ...pad(FINAL, 66, 0, 'tp'), ...hits([END], 'timp')],
       },
-      cues: [{ beat: 0, section: 'low' }, { beat: w, section: 'ww' }, { beat: v, section: 'vln' }, { beat: t, section: 'br' }],
-      dynamics: [{ beat: 0, mark: 'pp', level: 0.2 }, { beat: v, mark: 'p', level: 0.35 }, { beat: t, mark: 'ff', level: 0.95 }],
-      hairpins: [{ from: bar(15), to: t, kind: 'cresc' }],
+      cues: [{ beat: 0, section: 'low' }, { beat: w, section: 'ww' }, { beat: v, section: 'vln' }, { beat: y, section: 'br' }],
+      dynamics: [{ beat: 0, mark: 'pp', level: 0.2 }, { beat: v, mark: 'p', level: 0.32 }, { beat: x, mark: 'mp', level: 0.45 },
+                 { beat: y, mark: 'mf', level: 0.6 }, { beat: z, mark: 'f', level: 0.8 }, { beat: q, mark: 'ff', level: 0.97 }],
+      hairpins: [{ from: bar(23), to: y, kind: 'cresc' }, { from: bar(39), to: q, kind: 'cresc' }],
       fermata: END,
     };
   })();

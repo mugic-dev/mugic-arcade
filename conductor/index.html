@@ -43,10 +43,10 @@
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js?v=13"></script>
-<script src="audio.js?v=13"></script>
-<script src="beat.js?v=13"></script>
-<script src="stage.js?v=13"></script>
+<script src="pieces.js?v=14"></script>
+<script src="audio.js?v=14"></script>
+<script src="beat.js?v=14"></script>
+<script src="stage.js?v=14"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
@@ -291,7 +291,7 @@ function finish(held) {
       : points >= 300 ? 'Polite applause' : 'The orchestra is confused',
     lines: [
       `Cues: ${hits}/${nc}${missed.length ? ' — missed ' + missed.join(', ') : ' — every entry in time'}${game.falseCues ? ` · ${game.falseCues} confusing cue${game.falseCues > 1 ? 's' : ''}` : ''}`,
-      `Together with the orchestra ${pct(together)} · steadiness ${pct(steady)} · ♩ = ${Math.round(bpm)} (marked ${piece.tempos ? piece.tempos.map(t => t[1]).join('→') : piece.tempo})`,
+      `Together with the orchestra ${pct(together)} · steadiness ${pct(steady)} · ♩ = ${Math.round(bpm)} (marked ${piece.tempos ? piece.tempos[0][1] + '→' + piece.tempos[piece.tempos.length - 1][1] : piece.tempo})`,
       `Dynamics: ${pct(dyn)} match with the score`,
       `Fermata held ${held.toFixed(1)} beats${held >= 2 ? ', clean cutoff' : ' — hold it longer'}`,
       ...(game.stops ? [`The orchestra stopped ${game.stops}× — keep beating`] : []),
