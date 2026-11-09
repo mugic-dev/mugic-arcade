@@ -26,6 +26,7 @@
 <canvas id="stage" width="960" height="540"></canvas>
 <div class="scores"><h3>GLOBAL TOP 10 — CONDUCTOR</h3><div id="board"></div></div>
 <div id="tuning"></div>
+<!-- bump ?v= on the scripts above with every change, so browsers don't mix a new page with old cached scripts -->
 <p class="help">Wear the MUGIC on your conducting hand, point it at the middle of the orchestra (the violas) and
   click Calibrate center. Each beat is a small down-and-up dip of the hand: the bottom of the dip is where the
   orchestra plays. Bigger beats play louder. To start, give a preparatory beat, then the downbeat: the orchestra
@@ -38,10 +39,10 @@
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js"></script>
-<script src="audio.js"></script>
-<script src="beat.js"></script>
-<script src="stage.js"></script>
+<script src="pieces.js?v=3"></script>
+<script src="audio.js?v=3"></script>
+<script src="beat.js?v=3"></script>
+<script src="stage.js?v=3"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
