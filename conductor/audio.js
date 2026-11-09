@@ -34,17 +34,35 @@ const Orchestra = (() => {
     index = await (await fetch('samples/index.json')).json();
   }
 
-  // Load the samples a piece needs; onProgress(0..1).
+  // one sample file, with a timeout and a few retries; throws naming the file if it can't be had
+  async function fetchSample(url) {
+    for (let attempt = 1; ; ++attempt) {
+      const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 10000);
+      try {
+        const r = await fetch(url, { signal: abort.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await ctx.decodeAudioData(await r.arrayBuffer());
+      } catch (err) {
+        console.error('sample', url, 'attempt', attempt, err);
+        if (attempt >= 3) throw new Error(`${url}: ${err.message || err}`);
+      } finally { clearTimeout(timer); }
+    }
+  }
+
+  // Load the samples a piece needs (six at a time); onProgress(0..1).
   async function load(piece, onProgress = () => {}) {
     await init();
     const insts = [...new Set(piece.sections.map(s => s.inst))];
     const jobs = insts.flatMap(inst => index[inst].map(m => [inst, m])).filter(([i, m]) => !buffers[i + m]);
-    let done = 0;
-    await Promise.all(jobs.map(async ([inst, m]) => {
-      const data = await (await fetch(`samples/${inst}/${m}.wav`)).arrayBuffer();
-      buffers[inst + m] = await ctx.decodeAudioData(data);
-      onProgress(++done / jobs.length);
-    }));
+    let done = 0, next = 0;
+    const worker = async () => {
+      while (next < jobs.length) {
+        const [inst, m] = jobs[next++];
+        buffers[inst + m] = await fetchSample(`samples/${inst}/${m}.wav`);
+        onProgress(++done / jobs.length);
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
     for (const s of piece.sections) {
       if (channels[s.id]) continue;
       const gain = ctx.createGain(), tone = ctx.createBiquadFilter(), send = ctx.createGain();

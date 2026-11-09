@@ -322,7 +322,8 @@ function currentBanner(p) {
   }
   switch (game.state) {
     case 'title': return { text: 'Choose a piece and press “Take the podium”' };
-    case 'loading': return { text: `Tuning up… ${Math.round(game.progress * 100)}%` };
+    case 'loading': return game.loadError ? { text: 'Could not load the instruments — press the button to try again', sub: game.loadError, bad: true }
+      : { text: `Tuning up… ${Math.round(game.progress * 100)}%` };
     case 'ready': {
       const from = game.startBeat ? `From bar ${game.startBeat / piece.meter + 1}: ` : '';
       if (!game.armed) return { text: from + 'Raise your hand and hold it still', sub: 'the orchestra watches you, ready to play' };
@@ -361,21 +362,24 @@ addEventListener('keydown', e => {
 });
 kbYaw = yawOf(kbIndex);
 
-$('rec').onclick = async () => {
+// run `fn` with the buttons disabled while the samples load; a load failure is shown instead of hanging
+async function withLoading(fn) {
+  ['go', 'rec', 'piece'].forEach(id => { $(id).disabled = true; });
+  Object.assign(game, { state: 'loading', progress: 0, loadError: null });
+  try { await fn(); } catch (err) { Object.assign(game, { state: 'loading', loadError: err.message }); }
+  ['go', 'rec', 'piece'].forEach(id => { $(id).disabled = false; });
+}
+$('rec').onclick = () => {
   if (!Mugic.connected && !confirm('No MUGIC connected — record anyway (keyboard only)?')) return;
-  $('rec').disabled = true; Object.assign(game, { state: 'loading', progress: 0 });
-  await startRecording();
-  $('rec').disabled = false;
+  withLoading(startRecording);
 };
-$('go').onclick = async () => {
+$('go').onclick = () => withLoading(async () => {
   game.recording = false;
-  $('go').disabled = true;
-  Object.assign(game, { state: 'loading', progress: 0 });
   await Orchestra.load(piece, f => { game.progress = f; });
   Orchestra.resume(); Orchestra.releaseAll(0.3);
   newRun();
-  $('go').disabled = false; $('go').textContent = 'Start over';
-};
+  $('go').textContent = 'Start over';
+});
 
 // ---------- main loop ----------
 newRun(); game.state = 'title';
