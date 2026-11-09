@@ -42,6 +42,14 @@ const Beat = (() => {
     }
   };
 
+  // true when the hand has held still (pitch and yaw within `deg`) for the last `secs`
+  b.still = (t, secs = 0.5, deg = 3) => {
+    const h = b.history.filter(s => s.t >= t - secs);
+    if (!h.length || h[0].t > t - secs * 0.8) return false;
+    const range = k => Math.max(...h.map(s => s[k])) - Math.min(...h.map(s => s[k]));
+    return range('pitch') < deg && range('yaw') < deg;
+  };
+
   b.flick = t => { if (b.mode === 'flick') fire(t, sizeOver(t - 0.6, t)); };
   b.tap = (t, size, yaw) => { if (t - lastBeat >= MIN_GAP) { lastBeat = t; b.onBeat && b.onBeat({ t, size, yaw }); } };
   return b;

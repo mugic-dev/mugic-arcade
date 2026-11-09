@@ -91,12 +91,24 @@ const Stage = (() => {
   }
 
   // where you point: a soft beam from the podium
-  function pointer(ctx, yaw) {
-    const a = at(yaw, 330), g = ctx.createLinearGradient(CX, CY - 40, a.x, a.y);
-    g.addColorStop(0, 'rgba(255, 240, 200, 0.18)'); g.addColorStop(1, 'rgba(255, 240, 200, 0)');
+  function pointer(ctx, yaw, onTarget) {
+    const a = at(yaw, 330), g = ctx.createLinearGradient(CX, CY - 40, a.x, a.y), c = onTarget ? '80, 255, 140' : '255, 240, 200';
+    g.addColorStop(0, `rgba(${c}, ${onTarget ? 0.4 : 0.18})`); g.addColorStop(1, `rgba(${c}, 0)`);
     const n = { x: -(a.y - CY + 40), y: a.x - CX }, l = Math.hypot(n.x, n.y) || 1, w = 26;
     ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(CX, CY - 40);
     ctx.lineTo(a.x + n.x / l * w, a.y + n.y / l * w); ctx.lineTo(a.x - n.x / l * w, a.y - n.y / l * w); ctx.fill();
+  }
+
+  // a gold arrow from where you point to the section to cue
+  function cueArrow(ctx, yaw, s, t) {
+    const a = at(yaw, 250), b = at(s.yaw + (yaw < s.yaw ? -6 : 6), 250), lift = 40 + 6 * Math.sin(t * 6);
+    const mid = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) - lift - Math.abs(b.x - a.x) * 0.15 };
+    ctx.strokeStyle = '#ffcd5a'; ctx.fillStyle = '#ffcd5a'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(a.x, a.y - 20); ctx.quadraticCurveTo(mid.x, mid.y, b.x, b.y - 20); ctx.stroke();
+    const ang = Math.atan2(b.y - 20 - mid.y, b.x - mid.x);
+    ctx.beginPath(); ctx.moveTo(b.x + 6 * Math.cos(ang), b.y - 20 + 6 * Math.sin(ang));
+    ctx.lineTo(b.x - 16 * Math.cos(ang - 0.5), b.y - 20 - 16 * Math.sin(ang - 0.5));
+    ctx.lineTo(b.x - 16 * Math.cos(ang + 0.5), b.y - 20 - 16 * Math.sin(ang + 0.5)); ctx.fill();
   }
 
   // the baton: the last second of the hand's motion as a fading gold ribbon, sparks at each beat
@@ -193,7 +205,8 @@ const Stage = (() => {
   function draw(ctx, g) {
     hall(ctx);
     for (const s of g.piece.sections) glow(ctx, s, g.sections[s.id].glow, COLORS[s.id]);
-    if (g.pointing) pointer(ctx, g.yaw);
+    const onTarget = g.cueTarget && Math.abs(g.yaw - g.cueTarget.yaw) <= g.zone;
+    if (g.pointing) pointer(ctx, g.yaw, onTarget);
     const t = g.t;
     for (const p of seats(g.piece)) player(ctx, p, g.sections[p.sec.id], t);
     ctx.font = 'bold 13px system-ui, sans-serif'; ctx.textAlign = 'center';
@@ -201,6 +214,7 @@ const Stage = (() => {
       const p = at(s.yaw, s.inst === 'cb' ? 300 : 275); p.y -= s.inst === 'cb' ? 92 : 64; ctx.fillStyle = COLORS[s.id]; ctx.fillText(s.name, p.x, p.y);
     }
     ctx.textAlign = 'left';
+    if (g.cueTarget && g.pointing && !onTarget) cueArrow(ctx, g.yaw, g.cueTarget, t);
     trail(ctx, g.history, g.beats, g.now);
     hud(ctx, g);
     banner(ctx, g.banner);

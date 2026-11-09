@@ -86,6 +86,14 @@ const Orchestra = (() => {
     return v;
   }
 
+  // a metronome tick (count-in), accented on the first beat of the bar
+  function click(t, accent) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = accent ? 1600 : 1100;
+    g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    o.connect(g).connect(master); o.start(t); o.stop(t + 0.07);
+  }
+
   const releaseAll = (fade = 0.4) => voices.forEach(v => v.release(now(), fade));
 
   // Applause: `amount` 0..1 sets how many claps per second and how long it lasts.
@@ -103,6 +111,6 @@ const Orchestra = (() => {
     }
   }
 
-  return { load, level, note, releaseAll, applause, beatAt, timeOf, setRate, startAt, now: () => (ctx ? now() : 0),
+  return { load, level, note, click, releaseAll, applause, beatAt, timeOf, setRate, startAt, now: () => (ctx ? now() : 0),
            get rate() { return anchor.rate; }, resume: () => ctx && ctx.resume() };
 })();
