@@ -3,29 +3,43 @@
 const Stage = (() => {
   const W = 960, H = 540, CX = 480, CY = 500, LANE = 462;
   const COLORS = { vln1: '#f2c14e', vln2: '#f08a5d', vla: '#b48ef0', vc: '#5db8f0', cb: '#6fdc8c' };
-  const SPAN = 12;   // half-width (degrees of yaw) each section occupies on the arc
-  const ARC = 0.85;  // stage angle per degree of yaw, to spread the orchestra across the screen
+  const ARC = 62, GAP = 3;   // the orchestra spans ±ARC degrees of stage angle, GAP degrees between sections
 
-  // stage position for yaw `a` (degrees) at radius r
-  const at = (a, r) => { const t = a * ARC * Math.PI / 180; return { x: CX + r * Math.sin(t) * 1.25, y: CY - r * Math.cos(t) * 0.62 }; };
+  // stage position for stage angle `a` (degrees, 0 = straight ahead) at radius r
+  const at = (a, r) => { const t = a * Math.PI / 180; return { x: CX + r * Math.sin(t) * 1.25, y: CY - r * Math.cos(t) * 0.62 }; };
 
-  // seats per section: two rows on the arc (basses stand in one row at the back)
-  const seatCache = new Map();
-  function seats(piece) {
-    if (seatCache.has(piece)) return seatCache.get(piece);
-    const list = [];
+  // Each section gets its own block of the arc, in order, sized by its widest row; the seats fill the block in two
+  // rows (basses stand in one row at the back). Pointing (yaw) maps onto the stage through the section centers.
+  const layoutCache = new Map();
+  function layout(piece) {
+    if (layoutCache.has(piece)) return layoutCache.get(piece);
+    const rowsOf = s => s.inst === 'cb' ? [[300, s.players]] : [[210, Math.ceil(s.players / 2)], [275, Math.floor(s.players / 2)]];
+    const width = s => Math.max(...rowsOf(s).map(([, n]) => n));
+    const total = piece.sections.reduce((a, s) => a + width(s), 0), per = (2 * ARC - GAP * (piece.sections.length - 1)) / total;
+    const seats = [], centers = {};
+    let a0 = -ARC;
     for (const s of piece.sections) {
-      const rows = s.inst === 'cb' ? [[300, s.players]] : [[210, Math.ceil(s.players / 2)], [275, Math.floor(s.players / 2)]];
-      for (const [r, n] of rows) {
+      const w = width(s) * per, mid = a0 + w / 2;
+      centers[s.id] = mid;
+      for (const [r, n] of rowsOf(s)) {
         for (let i = 0; i < n; ++i) {
-          const a = s.yaw + (n === 1 ? 0 : -SPAN + 2 * SPAN * i / (n - 1)) * (r === 210 ? 0.85 : 1);
-          list.push({ sec: s, ...at(a, r), scale: r === 210 ? 1 : 0.86, seed: list.length });
+          const a = mid + (n === 1 ? 0 : (i / (n - 1) - 0.5) * (w - per) * (r === 210 ? 1 : 0.85));
+          seats.push({ sec: s, ...at(a, r), scale: r === 210 ? 1 : 0.86, seed: seats.length });
         }
       }
+      a0 += w + GAP;
     }
-    list.sort((p, q) => p.y - q.y);
-    seatCache.set(piece, list);
-    return list;
+    seats.sort((p, q) => p.y - q.y);
+    const L = { seats, centers };
+    layoutCache.set(piece, L);
+    return L;
+  }
+  // stage angle for a pointing direction: piecewise linear through the section centers, extended at the ends
+  function angleOf(piece, yaw) {
+    const pts = piece.sections.map(s => [s.yaw, layout(piece).centers[s.id]]);
+    let i = 1; while (i < pts.length - 1 && yaw > pts[i][0]) ++i;
+    const [[y0, a0], [y1, a1]] = [pts[i - 1], pts[i]];
+    return Math.max(-80, Math.min(80, a0 + (yaw - y0) * (a1 - a0) / (y1 - y0)));
   }
 
   function hall(ctx) {
@@ -47,9 +61,9 @@ const Stage = (() => {
     for (const r of [210, 275]) { ctx.beginPath(); ctx.ellipse(CX, CY, r * 1.25, r * 0.62, 0, Math.PI, 2 * Math.PI); ctx.stroke(); }
   }
 
-  function glow(ctx, s, amount, color) {
+  function glow(ctx, piece, s, amount, color) {
     if (amount <= 0.01) return;
-    const p = at(s.yaw, 245), g = ctx.createRadialGradient(p.x, p.y, 5, p.x, p.y, 120);
+    const p = at(layout(piece).centers[s.id], 245), g = ctx.createRadialGradient(p.x, p.y, 5, p.x, p.y, 120);
     g.addColorStop(0, color + Math.round(amount * 120).toString(16).padStart(2, '0')); g.addColorStop(1, color + '00');
     ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(p.x, p.y, 120, 60, 0, 0, 2 * Math.PI); ctx.fill();
   }
@@ -91,8 +105,8 @@ const Stage = (() => {
   }
 
   // where you point: a soft beam from the podium
-  function pointer(ctx, yaw, onTarget) {
-    const a = at(yaw, 330), g = ctx.createLinearGradient(CX, CY - 40, a.x, a.y), c = onTarget ? '80, 255, 140' : '255, 240, 200';
+  function pointer(ctx, ang, onTarget) {
+    const a = at(ang, 330), g = ctx.createLinearGradient(CX, CY - 40, a.x, a.y), c = onTarget ? '80, 255, 140' : '255, 240, 200';
     g.addColorStop(0, `rgba(${c}, ${onTarget ? 0.4 : 0.18})`); g.addColorStop(1, `rgba(${c}, 0)`);
     const n = { x: -(a.y - CY + 40), y: a.x - CX }, l = Math.hypot(n.x, n.y) || 1, w = 26;
     ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(CX, CY - 40);
@@ -100,15 +114,15 @@ const Stage = (() => {
   }
 
   // a gold arrow from where you point to the section to cue
-  function cueArrow(ctx, yaw, s, t) {
-    const a = at(yaw, 250), b = at(s.yaw + (yaw < s.yaw ? -6 : 6), 250), lift = 40 + 6 * Math.sin(t * 6);
+  function cueArrow(ctx, ang, to, t) {
+    const a = at(ang, 250), b = at(to + (ang < to ? -5 : 5), 250), lift = 40 + 6 * Math.sin(t * 6);
     const mid = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) - lift - Math.abs(b.x - a.x) * 0.15 };
     ctx.strokeStyle = '#ffcd5a'; ctx.fillStyle = '#ffcd5a'; ctx.lineWidth = 5; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(a.x, a.y - 20); ctx.quadraticCurveTo(mid.x, mid.y, b.x, b.y - 20); ctx.stroke();
-    const ang = Math.atan2(b.y - 20 - mid.y, b.x - mid.x);
-    ctx.beginPath(); ctx.moveTo(b.x + 6 * Math.cos(ang), b.y - 20 + 6 * Math.sin(ang));
-    ctx.lineTo(b.x - 16 * Math.cos(ang - 0.5), b.y - 20 - 16 * Math.sin(ang - 0.5));
-    ctx.lineTo(b.x - 16 * Math.cos(ang + 0.5), b.y - 20 - 16 * Math.sin(ang + 0.5)); ctx.fill();
+    const dir = Math.atan2(b.y - 20 - mid.y, b.x - mid.x);
+    ctx.beginPath(); ctx.moveTo(b.x + 6 * Math.cos(dir), b.y - 20 + 6 * Math.sin(dir));
+    ctx.lineTo(b.x - 16 * Math.cos(dir - 0.5), b.y - 20 - 16 * Math.sin(dir - 0.5));
+    ctx.lineTo(b.x - 16 * Math.cos(dir + 0.5), b.y - 20 - 16 * Math.sin(dir + 0.5)); ctx.fill();
   }
 
   // the baton: the last second of the hand's motion as a fading gold ribbon, sparks at each beat
@@ -204,17 +218,18 @@ const Stage = (() => {
 
   function draw(ctx, g) {
     hall(ctx);
-    for (const s of g.piece.sections) glow(ctx, s, g.sections[s.id].glow, COLORS[s.id]);
+    for (const s of g.piece.sections) glow(ctx, g.piece, s, g.sections[s.id].glow, COLORS[s.id]);
+    const L = layout(g.piece), ang = angleOf(g.piece, g.yaw);
     const onTarget = g.onTarget;
-    if (g.pointing) pointer(ctx, g.yaw, onTarget);
+    if (g.pointing) pointer(ctx, ang, onTarget);
     const t = g.t;
-    for (const p of seats(g.piece)) player(ctx, p, g.sections[p.sec.id], t);
+    for (const p of L.seats) player(ctx, p, g.sections[p.sec.id], t);
     ctx.font = 'bold 13px system-ui, sans-serif'; ctx.textAlign = 'center';
     for (const s of g.piece.sections) {
-      const p = at(s.yaw, s.inst === 'cb' ? 300 : 275); p.y -= s.inst === 'cb' ? 92 : 64; ctx.fillStyle = COLORS[s.id]; ctx.fillText(s.name, p.x, p.y);
+      const p = at(L.centers[s.id], s.inst === 'cb' ? 300 : 275); p.y -= s.inst === 'cb' ? 92 : 64; ctx.fillStyle = COLORS[s.id]; ctx.fillText(s.name, p.x, p.y);
     }
     ctx.textAlign = 'left';
-    if (g.cueTarget && g.pointing && !onTarget) cueArrow(ctx, g.yaw, g.cueTarget, t);
+    if (g.cueTarget && g.pointing && !onTarget) cueArrow(ctx, ang, L.centers[g.cueTarget.id], t);
     trail(ctx, g.history, g.beats, g.now);
     hud(ctx, g);
     banner(ctx, g.banner);
@@ -222,5 +237,5 @@ const Stage = (() => {
     if (g.report) card(ctx, g.report);
   }
 
-  return { draw, W, H, COLORS, SPAN };
+  return { draw, W, H, COLORS };
 })();

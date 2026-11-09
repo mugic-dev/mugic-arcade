@@ -18,10 +18,11 @@ const Beat = (() => {
     return h.length ? Math.max(...h) - Math.min(...h) : 0;
   };
 
-  function fire(t, size) {
+  // bottom: the lowest pitch of the stroke (a dip lower than usual is a cue for the section you already face)
+  function fire(t, size, bottom) {
     if (t - lastBeat < MIN_GAP) return;
     lastBeat = t;
-    if (b.onBeat) b.onBeat({ t, size, yaw: yawOver(t - 0.45, t) });
+    if (b.onBeat) b.onBeat({ t, size, bottom, yaw: yawOver(t - 0.45, t) });
   }
 
   b.sample = (t, pitch, yaw) => {
@@ -36,7 +37,7 @@ const Beat = (() => {
     if (falling && vel > RISE) {
       falling = false;
       if (high - low.pitch >= b.minDip) {
-        fire(low.t, high - low.pitch);
+        fire(low.t, high - low.pitch, low.pitch);
         high = pitch; low = { pitch, t };
       }
     }
@@ -50,7 +51,11 @@ const Beat = (() => {
     return range('pitch') < deg && range('yaw') < deg;
   };
 
-  b.flick = t => { if (b.mode === 'flick') fire(t, sizeOver(t - 0.6, t)); };
+  b.flick = t => {
+    if (b.mode !== 'flick') return;
+    const h = b.history.filter(s => s.t >= t - 0.4);
+    fire(t, sizeOver(t - 0.6, t), h.length ? Math.min(...h.map(s => s.pitch)) : 0);
+  };
   b.tap = (t, size, yaw) => { if (t - lastBeat >= MIN_GAP) { lastBeat = t; b.onBeat && b.onBeat({ t, size, yaw }); } };
   return b;
 })();

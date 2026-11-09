@@ -2,7 +2,7 @@
 // Times are in beats from the downbeat of bar 1 (beat 0); a note is [beat, midi, beats].
 //   sections: stage left -> right; yaw (degrees from the calibrated center) is where the player points to cue it
 //     (from a recorded player: a quick wide point, about ±60-75° for the far sections; the nearest section wins)
-//   cues: { beat, section } — the section's entry; point at it from two beats before to one beat after
+//   cues: { beat, section } — the section's entry, cued on that very beat (see index.html, cueGesture)
 //   dynamics: { beat, mark, level 0..1 }; hairpins: { from, to, kind: 'cresc' | 'dim' }
 //   fermata: beat of the final held chord (the orchestra holds until the cutoff)
 const PIECES = (() => {
@@ -37,9 +37,9 @@ const PIECES = (() => {
     sections: [
       { id: 'vln1', name: 'Violins I', inst: 'vln', yaw: -60, players: 6 },
       { id: 'vln2', name: 'Violins II', inst: 'vln', yaw: -25, players: 6 },
-      { id: 'vla', name: 'Violas', inst: 'vla', yaw: 7, players: 4 },
-      { id: 'vc', name: 'Cellos', inst: 'vc', yaw: 40, players: 4 },
-      { id: 'cb', name: 'Basses', inst: 'cb', yaw: 70, players: 2 },
+      { id: 'vla', name: 'Violas', inst: 'vla', yaw: 20, players: 4 },
+      { id: 'vc', name: 'Cellos', inst: 'vc', yaw: 45, players: 4 },
+      { id: 'cb', name: 'Basses', inst: 'cb', yaw: 72, players: 2 },
     ],
     parts: {
       vc: [...ground(0, 0), [END, midi('D3'), 4]],
