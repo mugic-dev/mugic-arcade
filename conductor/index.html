@@ -43,10 +43,10 @@
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js?v=8"></script>
-<script src="audio.js?v=8"></script>
-<script src="beat.js?v=8"></script>
-<script src="stage.js?v=8"></script>
+<script src="pieces.js?v=9"></script>
+<script src="audio.js?v=9"></script>
+<script src="beat.js?v=9"></script>
+<script src="stage.js?v=9"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
@@ -379,7 +379,7 @@ function currentBanner(p) {
     case 'ready': {
       const from = game.startBeat ? `From bar ${game.startBeat / piece.meter + 1}: ` : '';
       if (!game.armed) return { text: from + 'Raise your hand and hold it still', sub: 'the orchestra watches you, ready to play' };
-      return { text: 'Ready — give a preparatory beat, then the downbeat', sub: `they start on the downbeat, at the tempo of those two beats (about ♩ = ${marked(game.startBeat)})` };
+      return { text: 'Ready — give a preparatory beat, then the downbeat', sub: `about ♩ = ${marked(game.startBeat)} · the score at the bottom ▼ shows every entry to cue` };
     }
     case 'prep': return { text: '…and the downbeat!' };
     case 'hold': return easy ? { text: 'Hold the chord… then cut off with a flick' } : null;
@@ -387,6 +387,10 @@ function currentBanner(p) {
       if (game.tooFast) return { text: game.tooFast > 0 ? 'Too fast — the orchestra can\'t go faster' : 'Too slow — the orchestra can\'t go slower',
         sub: `they stay within ♩ = ${Math.round(marked() * (1 - RANGE))}–${Math.round(marked() * (1 + RANGE))} here`, bad: true };
       if (!easy) return null;
+      const soon = piece.cues.filter((c, k) => game.cueState[k] === 'pending' && c.beat - p <= 8 && c.beat > p - 0.5);
+      if (soon.length > 1 && soon[0].beat - p > 2)   // entries close together: read them off the score
+        return { text: 'Coming up: ' + soon.map(c => `${section(c.section).name} (bar ${c.beat / piece.meter + 1})`).join(' · '),
+                 sub: '▼ watch the score below: cue each one on its bar' };
       const c = nextCue(p);
       if (c) {
         const s = section(c.section), now = inWindow(c, p), left = Math.ceil(c.beat - p);

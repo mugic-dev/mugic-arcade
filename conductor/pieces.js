@@ -141,13 +141,13 @@ const PIECES = (() => {
       C#4 C#4 E4 | B4:1 | r:${T} B5 B5 | r G5 G5 | C#4 C#4 E4 | B4:1 | r:${T} B5 B5 | r F#5 F#5 |
       D4:${T} D4 F#4 | A4:${T} D5:2/3 | r:${T} D6 D6 | r A5 A5 | D4:${T} D4 F#4 | A4:${T} D5:2/3 | r:${T} D6 D6 | r B5 B5`;
     const HT = 'D:7 A7:9 D:7 G:1';
-    const s1 = 8, s2 = 32, END = 58;
-    const h1 = chords(s1, HT), h2 = chords(s2, HT), CAD = chords(56, 'A7:2'), FINAL = chords(END, 'D:1');
-    const all = [...chords(4, 'D:4'), ...h1, ...h2, ...CAD];
+    const s1 = 16, s2 = 40, END = 66;   // an unhurried introduction: horn call at bar 5, basses at bar 9
+    const h1 = chords(s1, HT), h2 = chords(s2, HT), CAD = chords(64, 'A7:2'), FINAL = chords(END, 'D:1');
+    const all = [...chords(8, 'D:8'), ...h1, ...h2, ...CAD];
     const after = (chs, lo, k) => pulse(chs, lo, k, 1, [1 / 3, 2 / 3], 0.25);
     const theme1 = up(mel(s1, THEME), -12);
     return {
-      id: 'danube', title: 'The Blue Danube', composer: 'Johann Strauss II', meter: 1, tempo: 56, bars: 59,
+      id: 'danube', title: 'The Blue Danube', composer: 'Johann Strauss II', meter: 1, tempo: 56, bars: 67,
       sections: [
         { id: 'vln', name: 'Violins', inst: 'vln', players: 8 },
         { id: 'vla', name: 'Violas', inst: 'vla', players: 4 },
@@ -157,14 +157,14 @@ const PIECES = (() => {
         { id: 'cb', name: 'Basses', inst: 'cbp', look: 'cb', players: 2 },
       ],
       parts: {
-        vln: [[0, midi('A4'), 8], [0, midi('D5'), 8], ...mel(s2, THEME), ...pad(CAD, 76), ...pad(FINAL, 74, 1)],
-        br: [...mel(2, `D4:${T} D4 F#4 | A4:2`), ...theme1.map(([b, m, d]) => [b, m > 69 ? m - 12 : m, d]), ...pad(FINAL, 62)],
+        vln: [[0, midi('A4'), 16], [0, midi('D5'), 16], ...mel(s2, THEME), ...pad(CAD, 76), ...pad(FINAL, 74, 1)],
+        br: [...mel(4, `D4:${T} D4 F#4 | A4:2 | r:2 | D4:${T} D4 F#4 | A4:2`), ...theme1.map(([b, m, d]) => [b, m > 69 ? m - 12 : m, d]), ...pad(FINAL, 62)],
         cb: [...pulse(all, 38, 0, 1, [0], 1 / 3), ...roots(FINAL, 38, 'cb')],
         vc: [...theme1, ...pulse(h2, 48, 0, 1, [0], 1 / 3), ...pad(FINAL, 50)],
         vla: [...after([...h1, ...h2, ...CAD], 57, 1), ...after([...h1, ...h2, ...CAD], 60, 2)].filter(n => n[0] >= s1 + 4).concat(pad(FINAL, 57, 1)),
         ww: [...up(mel(s2 + 16, THEME.split('|').slice(16).join('|')), 12), ...pad(CAD, 81), ...pad(FINAL, 81, 1)],
       },
-      cues: [{ beat: 0, section: 'vln' }, { beat: 2, section: 'br' }, { beat: 4, section: 'cb' }, { beat: s1, section: 'vc' },
+      cues: [{ beat: 0, section: 'vln' }, { beat: 4, section: 'br' }, { beat: 8, section: 'cb' }, { beat: s1, section: 'vc' },
              { beat: s1 + 4, section: 'vla' }, { beat: s2, section: 'vln' }, { beat: s2 + 16, section: 'ww' }],
       dynamics: [{ beat: 0, mark: 'pp', level: 0.2 }, { beat: s1, mark: 'p', level: 0.35 }, { beat: s1 + 16, mark: 'mp', level: 0.45 },
                  { beat: s2, mark: 'mf', level: 0.6 }, { beat: s2 + 16, mark: 'f', level: 0.8 }],
