@@ -31,7 +31,7 @@
 <p class="help">Wear the MUGIC on your conducting hand, point it at the middle of the orchestra (the violas) and
   click Calibrate center. Raise your hand and hold it still: the orchestra gets ready. Each beat is a down-and-up dip
   of the hand — the bottom of the dip is where the orchestra plays; bigger beats play louder. Give a preparatory
-  beat, then the downbeat: the orchestra comes in on the downbeat at the tempo of those two beats (within ±25% of the
+  beat, then the downbeat: the orchestra comes in on the downbeat at the tempo of those two beats (within ±40% of the
   marked tempo), and then follows you. To cue a section, point at it ON its entry beat — swing toward it, or, if you
   already face it, dip lower than usual (Easy counts you in, shows a gold arrow and turns your beam green on target);
   a cue a beat or two early or late confuses them. Miss a cue and that section comes in timid.
@@ -43,10 +43,10 @@
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js?v=9"></script>
-<script src="audio.js?v=9"></script>
-<script src="beat.js?v=9"></script>
-<script src="stage.js?v=9"></script>
+<script src="pieces.js?v=10"></script>
+<script src="audio.js?v=10"></script>
+<script src="beat.js?v=10"></script>
+<script src="stage.js?v=10"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
@@ -87,7 +87,7 @@ const section = id => piece.sections.find(s => s.id === id);
 const SWING = 15, LOWER = 12;   // a cue: a beat swung ≥15° away from where you've been beating, or dipped ≥12° below
                                 // the shallowest of your last beats (a gradual lowering doesn't count)
 const NEAR = 2;                 // a cue gesture this many beats off a section's entry confuses it
-const RANGE = 0.25;      // the orchestra follows tempos within ±25% of the marked one, no further
+const RANGE = 0.4;       // the orchestra follows tempos within ±40% of the marked one, no further
 
 const game = { state: 'title', banner: null, flash: null, beats: [], keyboard: false, report: null };
 const sec = {};

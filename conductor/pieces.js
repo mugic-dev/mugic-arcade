@@ -2,7 +2,7 @@
 // Times are in beats (the beats you conduct) from the downbeat of bar 1 (beat 0); a note is [beat, midi, beats, inst?]
 // (inst: a sample set other than the section's, e.g. 'tp' in the brass section).
 //   meter: beats per bar (1 for a waltz conducted in one); tempo: marked beats per minute, or tempos: [[beat, bpm], ...]
-//     for a tempo that changes (linear in between); the orchestra follows within ±25% of the marked tempo
+//     for a tempo that changes (linear in between); the orchestra follows within ±40% of the marked tempo
 //   sections: stage left -> right; look: how the players are drawn; yaw (degrees from the calibrated center) is where
 //     the player points to cue it (Canon: from a recorded player; otherwise spread evenly from -70° to +70°)
 //   cues: { beat, section } — the section's entry, cued on that very beat (see index.html, cueGesture)
