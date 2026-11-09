@@ -36,7 +36,8 @@ const Beat = (() => {
     return bottom > (med(recent.map(r => r.top)) + med(recent.map(r => r.bottom))) / 2 && t - lastBeat < 0.8 * med(ivs);
   }
   function fire(t, size, bottom) {
-    if (t - lastBeat < MIN_GAP || rebound(t, size) || upHigh(t, bottom)) return;
+    const why = t - lastBeat < MIN_GAP ? 'too soon' : rebound(t, size) ? 'rebound' : upHigh(t, bottom) ? 'high and early' : null;
+    if (why) { if (b.onIgnore) b.onIgnore({ t, size, bottom, why }); return; }
     lastBeat = t;
     recent.push({ t, size, top: bottom + size, bottom }); if (recent.length > 5) recent.shift();
     if (b.onBeat) b.onBeat({ t, size, bottom, yaw: yawOver(t - 0.45, t) });

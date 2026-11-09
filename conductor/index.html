@@ -43,10 +43,10 @@
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js?v=16"></script>
-<script src="audio.js?v=16"></script>
-<script src="beat.js?v=16"></script>
-<script src="stage.js?v=16"></script>
+<script src="pieces.js?v=17"></script>
+<script src="audio.js?v=17"></script>
+<script src="beat.js?v=17"></script>
+<script src="stage.js?v=17"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
@@ -167,6 +167,10 @@ function saveRun() {
 }
 
 // ---------- beats ----------
+Beat.onIgnore = e => {   // dips the detector did not count as beats, kept in the run log / practice file for tuning
+  const L = game.recording ? game.rec : game.log, x = { t: +e.t.toFixed(3), size: +e.size.toFixed(1), bottom: +e.bottom.toFixed(1), why: e.why };
+  if (L) (L.ignored = L.ignored || []).push(x);
+};
 Beat.onBeat = e => {
   if (Scores.busy()) return;
   if (game.recording) { game.rec.detected.push({ t: +e.t.toFixed(3), size: +e.size.toFixed(1), yaw: +e.yaw.toFixed(1) }); game.beats.push({ t: e.t }); return; }
