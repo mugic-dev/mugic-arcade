@@ -22,6 +22,7 @@
     <option value="medium">Medium — read the cue lane</option></select></label>
   <button id="go">Take the podium</button>
   <button id="rec" title="The orchestra plays at the marked tempo while your motion is recorded, then a file is saved for tuning">Record practice</button>
+  <button id="save" hidden>Save recording</button>
 </div>
 <canvas id="stage" width="960" height="540"></canvas>
 <div class="scores"><h3>GLOBAL TOP 10 — CONDUCTOR</h3><div id="board"></div></div>
@@ -39,10 +40,10 @@
 <script src="../common/mugic.js"></script>
 <script src="../common/config.js"></script>
 <script src="../common/scores.js"></script>
-<script src="pieces.js?v=3"></script>
-<script src="audio.js?v=3"></script>
-<script src="beat.js?v=3"></script>
-<script src="stage.js?v=3"></script>
+<script src="pieces.js?v=4"></script>
+<script src="audio.js?v=4"></script>
+<script src="beat.js?v=4"></script>
+<script src="stage.js?v=4"></script>
 <script>
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
@@ -115,10 +116,13 @@ async function startRecording() {
     // score beat b happened at performance time perfAtBeat0 + b / beatsPerSecond (seconds)
     perfAtBeat0: performance.now() / 1000 - Orchestra.now() + t0 + COUNT_IN / BPS, beatsPerSecond: BPS,
     cues: piece.cues.map(c => ({ ...c, yaw: section(c.section).yaw })), sections: piece.sections.map(s => ({ id: s.id, yaw: s.yaw })),
-    samples: [], detected: [] };
+    samples: [], detected: [], flicks: [] };
+  $('save').hidden = false;
   Object.assign(game, { state: 'play', recording: true, lastBeat: Orchestra.now(), smoothIv: 1 / BPS, level: PIECES.target(piece, 0) });
 }
 function saveRecording() {
+  if (!game.recording) return;
+  Orchestra.releaseAll(0.4); $('save').hidden = true;
   const r = game.rec, name = `conductor-${r.piece}-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(r)], { type: 'application/json' }));
@@ -151,7 +155,10 @@ Beat.onBeat = e => {
     case 'done': if (performance.now() / 1000 > game.doneAt + 2.5) newRun(); break;
   }
 };
-Mugic.onFlick = () => { const t = performance.now() / 1000; Beat.flick(t); if (game.state === 'hold' && Orchestra.now() - game.holdStart > 0.6) cutoff(); };
+Mugic.onFlick = () => {
+  const t = performance.now() / 1000;
+  if (game.recording) { game.rec.flicks.push(+t.toFixed(3)); if (game.state === 'hold' && Orchestra.now() - game.holdStart > 0.6) saveRecording(); return; }
+  Beat.flick(t); if (game.state === 'hold' && Orchestra.now() - game.holdStart > 0.6) cutoff(); };
 
 // The tempo follower. Each ictus is the next beat (counted, so an orchestra running behind still knows which beat you
 // gave; re-synced to the nearest beat only if the count drifts more than a beat off). It steers the orchestra to land
@@ -272,7 +279,7 @@ function update(dt) {
       game.next[s.id] = i;
     }
   } else if (game.recording ? now - game.holdStart > 3 / BPS : now - game.holdStart > 12) {
-    if (game.recording) { Orchestra.releaseAll(0.4); saveRecording(); } else cutoff();
+    if (game.recording) saveRecording(); else cutoff();
   }
   for (const s of piece.sections) {
     const st = sec[s.id];
@@ -370,6 +377,7 @@ async function withLoading(fn) {
   try { await fn(); } catch (err) { Object.assign(game, { state: 'loading', loadError: err.message }); }
   ['go', 'rec', 'piece'].forEach(id => { $(id).disabled = false; });
 }
+$('save').onclick = saveRecording;
 $('rec').onclick = () => {
   if (!Mugic.connected && !confirm('No MUGIC connected — record anyway (keyboard only)?')) return;
   withLoading(startRecording);
