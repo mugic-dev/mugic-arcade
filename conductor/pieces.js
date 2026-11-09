@@ -225,6 +225,8 @@ const PIECES = (() => {
   })();
 
   const list = [canon, ode, danube, troll];
+  // the scheduler plays each part in order, so each part's notes must be in time order (parts are built voice by voice)
+  for (const p of list) for (const id in p.parts) p.parts[id].sort((x, y) => x[0] - y[0]);
   for (const p of list) {   // sections without a yaw: spread evenly across ±70°
     const n = p.sections.length;
     p.sections.forEach((s, i) => { if (s.yaw == null) s.yaw = Math.round(-70 + 140 * i / (n - 1)); });
