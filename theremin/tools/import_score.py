@@ -4,7 +4,7 @@
   python3 -I import_score.py SCORE --melody P1 --accomp P2 [--transpose K] [--from-bar N --to-bar M]
 
 Parts are MusicXML part ids (P1, P2, ...) or MIDI track numbers (0, 1, ...); --list shows them.
-Prints JSON {"melody": [[beat, midi, beats], ...], "accomp": [...], "beatsPerBar": n} with beats in quarter notes
+Prints JSON {"tempo": quarter bpm or null, "melody": [[beat, midi, beats], ...], "accomp": [...], "beatsPerBar": n} with beats in quarter notes
 from the first printed bar; paste it into theremin/pieces.js. Repeats are not expanded; ties are merged.
 """
 import argparse, json, re, struct, sys, zipfile
@@ -60,13 +60,14 @@ def musicxml_parts(path):
                     else:
                         open_ties.pop(m, None)
         parts[part.get('id')] = (names.get(part.get('id'), ''), notes, bar_start)
-    return parts, meter
+    tempo = next((float(s.get('tempo')) for s in root.iter('sound') if s.get('tempo')), None)
+    return parts, meter, tempo
 
 
 def midi_parts(path):
     data = open(path, 'rb').read()
     _, ntrk, tpq = struct.unpack('>HHH', data[8:14])
-    pos, parts = 14, {}
+    pos, parts, tempos, raw = 14, {}, [], {}
     for k in range(ntrk):
         size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
         trk, pos = data[pos + 8:pos + 8 + size], pos + 8 + size
@@ -85,6 +86,8 @@ def midi_parts(path):
                 kind, ln = trk[i], trk[i + 1]; i += 2
                 if kind == 3:
                     name = trk[i:i + ln].decode('latin-1')
+                elif kind == 0x51:
+                    tempos.append((tick, int.from_bytes(trk[i:i + 3], 'big')))
                 i += ln
             elif status in (0xF0, 0xF7):
                 ln = trk[i]; i += 1 + ln
@@ -98,8 +101,22 @@ def midi_parts(path):
                     s = on.pop(a)
                     notes.append([s / tpq, a, (tick - s) / tpq])
         if notes:
-            parts[str(k)] = (name, sorted(notes), None)
-    return parts, 4
+            raw[str(k)] = (name, notes)
+    # a performed MIDI's tempo changes (a ritardando) become timing: ticks -> seconds -> beats at the opening tempo
+    tempos = sorted(tempos) or [(0, 500000)]
+    us0 = tempos[0][1]
+
+    def beats(t):
+        acc, last_tick, us = 0.0, 0, tempos[0][1]
+        for tick, u in tempos:
+            if tick >= t * tpq:
+                break
+            acc += (tick - last_tick) * us; last_tick, us = tick, u
+        return (acc + (t * tpq - last_tick) * us) / us0 / tpq
+
+    for k, (name, notes) in raw.items():
+        parts[k] = (name, sorted([beats(s), m, beats(s + d) - beats(s)] for s, m, d in notes), None)
+    return parts, 4, round(60e6 / us0, 2)
 
 
 def main():
@@ -110,7 +127,7 @@ def main():
     ap.add_argument('--from-bar', type=int, default=1); ap.add_argument('--to-bar', type=int)
     ap.add_argument('--list', action='store_true')
     a = ap.parse_args()
-    parts, meter = (midi_parts if a.score.lower().endswith(('.mid', '.midi')) else musicxml_parts)(a.score)
+    parts, meter, tempo = (midi_parts if a.score.lower().endswith(('.mid', '.midi')) else musicxml_parts)(a.score)
     if a.list or not a.melody:
         for pid, (name, notes, _) in parts.items():
             print(pid, repr(name), len(notes), 'notes, range', min(n[1] for n in notes), max(n[1] for n in notes))
@@ -127,9 +144,11 @@ def main():
                 if n[0] not in best or n[1] > best[n[0]][1]:
                     best[n[0]] = n
             notes = sorted(best.values())
+            for n, nxt in zip(notes, notes[1:]):   # legato overlaps: end each note where the next begins
+                n[2] = min(n[2], nxt[0] - n[0])
         return [[round(n[0] - t0, 4), n[1] + a.transpose, round(n[2], 4)] for n in notes]
 
-    out = {'beatsPerBar': meter, 'melody': pick(a.melody, True),
+    out = {'beatsPerBar': meter, 'tempo': tempo, 'melody': pick(a.melody, True),
            'accomp': sorted(n for p in a.accomp.split(',') if p for n in pick(p, False))}
     json.dump(out, sys.stdout, separators=(',', ':'))
 
