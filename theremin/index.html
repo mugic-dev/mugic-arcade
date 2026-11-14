@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MUGIC Theremin Hero</title>
+<link rel="stylesheet" href="../common/arcade.css">
+<style>
+  canvas { image-rendering: auto; touch-action: none; }
+  .setup { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; margin-bottom: 10px; }
+  #go, #free { font-weight: bold; font-size: 18px; padding: 8px 20px; }
+  #go { background: #18a84a; border-color: #4dff88; color: #fff; }
+  #go:disabled { opacity: 0.5; cursor: default; }
+</style>
+</head>
+<body>
+<a class="back" href="../music.html">← 🎼 Music</a>
+<h1>THEREMIN HERO</h1>
+<div id="bar"></div>
+<div class="setup">
+  <label>Piece <select id="piece"></select></label>
+  <label>Level <select id="level">
+    <option value="easy">Easy — snaps to the notes, ±50 cents</option>
+    <option value="normal">Normal — ±30 cents; dynamics and vibrato add points</option>
+    <option value="hard">Hard — ±15 cents, at the marked loudness, vibrato where asked</option></select></label>
+  <label>Speed <select id="speed"><option value="0.75">75%</option><option value="1">100%</option></select></label>
+  <button id="go">Play</button>
+  <button id="free">Free play</button>
+</div>
+<canvas id="stage" width="960" height="540"></canvas>
+<div class="scores"><h3 id="boardTitle">GLOBAL TOP 10</h3><div id="board"></div></div>
+<div id="tuning"></div>
+<p class="help">Hold the MUGIC level, pointing ahead, and click Calibrate center: that pose plays the middle of the
+  piece's range. Tilt up for higher notes, down for lower ones (about 3–5° per semitone, depending on the piece).
+  Roll controls the volume: level is full, twist away (+) to fade to silence between phrases, like a thereminist's
+  left hand. (Set "Roll controls" to vibrato to make roll the vibrato depth instead.) A small wobble of the hand is
+  real vibrato (〰 by the dot when it's detected). Keep the glowing dot on the bars: green is in tune, blue close, red off.
+  On Normal and Hard the score's dynamics show above the lane (p, f, hairpins), the bars grow with the loudness and the
+  volume meter shows a green band: twist to match it. A wave on a bar asks for vibrato (espressivo passages; on Hard,
+  every long note). Normal: in tune counts 80%, dynamics 10%, vibrato 10%. Hard: a moment counts only when all are
+  right. With vibrato, the note you center on is what's graded. The guide tone quietly plays
+  the melody so you can play by ear. No MUGIC: move the mouse up and down over the stage, hold the button to sound.
+  Notes were converted from public-domain scores; tell us if a note sounds wrong.</p>
+
+<script src="../common/mugic.js?v=2"></script>
+<script src="../common/config.js"></script>
+<script src="../common/scores.js"></script>
+<script src="pieces.js?v=5"></script>
+<script>
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v)), clamp01 = v => clamp(v, 0, 1);
+const NAMES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+const noteName = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
+const TOL = { easy: 50, normal: 30, hard: 15 };   // cents that count as in tune
+const SILENT_ROLL = 50;                          // degrees of twist from level to silence
+const MAX_VIBRATO = 40;                          // cents of vibrato at full twist (roll = vibrato)
+// vibrato from the hand: the pitch over the last VIB_WINDOW s, less its trend, swinging VIB_DEPTH cents (half the
+// swing) at VIB_RATE times a second
+const VIB_WINDOW = 0.5, VIB_DEPTH = [8, 70], VIB_RATE = [4, 8];
+const CYCLE = 0.18;        // seconds: pitch is graded on its average over about one vibrato cycle (Normal, Hard)
+const VIB_SETTLE = 0.35;   // seconds into a note before vibrato is asked for
+const LOUD_TOL = 0.2;      // loudness within this of the marked one counts
+
+const opts = { level: 'easy', speed: '1', roll: 'volume', guide: true, piece: 'ode', motion: 0.3 };
+const OPTS_KEY = 'mugicThereminOpts1';
+try { Object.assign(opts, JSON.parse(localStorage.getItem(OPTS_KEY)) || {}); } catch (e) {}
+const saveOpts = () => { try { localStorage.setItem(OPTS_KEY, JSON.stringify(opts)); } catch (e) {} };
+Mugic.mountPanel($('bar'), $('tuning'), {
+  keys: 'mouse ↕ + button',
+  axes: ['pitch', 'roll'],
+  extraRows: [
+    ['Roll controls', `<select id="roll"><option value="volume">volume</option><option value="vibrato">vibrato</option></select>`, 'rollVal'],
+    ['Guide tone', `<input type="checkbox" id="guide">`, 'guideVal'],
+    ['Vibrato motion', `<input type="range" id="motion" min="0.05" max="3" step="0.05">`, 'motionVal'],
+  ],
+});
+for (const id of ['level', 'speed', 'roll', 'guide', 'motion']) {
+  const e = $(id), key = e.type === 'checkbox' ? 'checked' : 'value';
+  e[key] = opts[id];
+  e.onchange = e.oninput = () => { opts[id] = e.type === 'range' ? +e.value : e[key]; saveOpts(); if (id === 'level') showBoard(); };
+}
+
+// ---------- sound: a theremin voice (glides), a quiet guide voice, a soft accompaniment, all in a small hall ----------
+const Sound = (() => {
+  let ctx, master, reverb, voice, guide;
+  const hz = m => 440 * Math.pow(2, (m - 69) / 12);
+  function hall(seconds = 2.2) {
+    const n = Math.round(ctx.sampleRate * seconds), ir = ctx.createBuffer(2, n, ctx.sampleRate);
+    for (let c = 0; c < 2; ++c) { const d = ir.getChannelData(c); for (let i = 0; i < n; ++i) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 3.5); }
+    return ir;
+  }
+  // oscillators at the given harmonics (relative levels) -> lowpass -> gain; a shared LFO on their detune for vibrato
+  function synth(harmonics, cutoff, wet) {
+    const out = ctx.createGain(), tone = ctx.createBiquadFilter(), lfo = ctx.createOscillator(), depth = ctx.createGain();
+    out.gain.value = 0; tone.type = 'lowpass'; tone.frequency.value = cutoff;
+    lfo.frequency.value = 5.5; depth.gain.value = 0; lfo.connect(depth); lfo.start();
+    const oscs = harmonics.map(([k, level]) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      g.gain.value = level; o.connect(g).connect(tone); depth.connect(o.detune); o.start();
+      return [o, k];
+    });
+    const send = ctx.createGain(); send.gain.value = wet;
+    tone.connect(out); out.connect(master); out.connect(send).connect(reverb);
+    return {
+      out, depth,
+      pitch(m, t = ctx.currentTime, glide = 0.012) { for (const [o, k] of oscs) o.frequency.setTargetAtTime(hz(m) * k, t, glide); },
+      set(m, t) { for (const [o, k] of oscs) o.frequency.setValueAtTime(hz(m) * k, t); },
+    };
+  }
+  function init() {
+    if (ctx) return ctx.resume();
+    ctx = new AudioContext();
+    master = ctx.createGain(); master.gain.value = 0.9;
+    const comp = ctx.createDynamicsCompressor();
+    master.connect(comp).connect(ctx.destination);
+    reverb = ctx.createConvolver(); reverb.buffer = hall();
+    const wet = ctx.createGain(); wet.gain.value = 0.3; reverb.connect(wet).connect(comp);
+    voice = synth([[1, 1], [2, 0.18], [3, 0.06]], 2600, 0.8);
+    guide = synth([[1, 1], [2, 0.3]], 1500, 0.4);
+  }
+  const now = () => ctx ? ctx.currentTime : 0;
+  // the player's voice: midi (fractional), volume 0..1, vibrato in cents
+  function play(m, vol, vib) {
+    const t = now();
+    voice.pitch(m, t); voice.out.gain.setTargetAtTime(0.32 * vol * vol, t, 0.03); voice.depth.gain.setTargetAtTime(vib, t, 0.05);
+  }
+  function guideNote(m, t, secs, level) {
+    guide.set(m, t);
+    guide.out.gain.setTargetAtTime(level, t, 0.02);
+    guide.out.gain.setTargetAtTime(0, t + secs - 0.05, 0.03);
+  }
+  // a soft plucked-and-held accompaniment note
+  function note(m, t, secs, vel = 0.11) {
+    const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = 'triangle'; o.frequency.value = hz(m); f.type = 'lowpass'; f.frequency.value = 1800;
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vel, t + 0.01);
+    g.gain.setTargetAtTime(vel * 0.35, t + 0.01, 0.5);
+    g.gain.setTargetAtTime(0, t + secs, 0.08);
+    o.connect(f).connect(g).connect(master); g.connect(reverb);
+    o.start(t); o.stop(t + secs + 0.5);
+  }
+  function click(t, accent) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = accent ? 1600 : 1100;
+    g.gain.setValueAtTime(0.4, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    o.connect(g).connect(master); o.start(t); o.stop(t + 0.07);
+  }
+  const silence = () => { if (ctx) { voice.out.gain.setTargetAtTime(0, now(), 0.05); guide.out.gain.setTargetAtTime(0, now(), 0.05); } };
+  return { init, now, play, guideNote, note, click, silence };
+})();
+
+// ---------- the game ----------
+const playable = THEREMIN_PIECES.list.filter(p => !p.coming);
+$('piece').innerHTML = THEREMIN_PIECES.list.map(p =>
+  `<option value="${p.id}" ${p.coming ? 'disabled' : ''}>${p.composer} — ${p.title}${p.coming ? ' (coming)' : ''}</option>`).join('');
+let piece = playable.find(p => p.id === opts.piece) || playable[0];
+$('piece').value = piece.id;
+$('piece').onchange = e => { piece = playable.find(p => p.id === e.target.value); opts.piece = piece.id; saveOpts(); stop(); showBoard(); };
+
+const cv = $('stage'), g2 = cv.getContext('2d');
+const W = cv.width, H = cv.height, KEYS = 64, NOW_X = 330, PX_PER_SEC = 150, TOP = 92, BOTTOM = H - 30;
+const game = { state: 'title', trail: [], mouse: { y: H / 2, down: false } };
+
+// the pitch range on screen and on the MUGIC: the piece's range plus a margin; free play spans at least two octaves
+function layout(p, free) {
+  let lo = p.lo - 3, hi = p.hi + 3;
+  if (free && hi - lo < 24) { const mid = (lo + hi) / 2; lo = Math.round(mid - 12); hi = lo + 24; }
+  return { lo, hi, mid: (p.lo + p.hi) / 2, degPerSemi: clamp(80 / (hi - lo), 2.5, 5) };
+}
+const yOf = m => BOTTOM - (m - game.range.lo) / (game.range.hi - game.range.lo) * (BOTTOM - TOP);
+const mOfY = y => game.range.lo + (BOTTOM - y) / (BOTTOM - TOP) * (game.range.hi - game.range.lo);
+game.range = layout(piece, false);
+
+const spb = () => 60 / (piece.tempo * +opts.speed);   // seconds per beat
+const beatNow = () => (Sound.now() - game.t0) / spb();
+const COUNT_IN = () => piece.beatsPerBar;
+
+function start(free) {
+  Sound.init();
+  game.range = layout(piece, free);
+  Object.assign(game, { free, trail: [], tally: { total: 0, pitch: 0, loud: 0, loudTotal: 0, vib: 0, vibTotal: 0, all: 0 }, rest: 0, hint: null, noteScore: piece.melody.map(() => ({ good: 0, total: 0 })), report: null, posted: false });
+  if (free) { game.state = 'free'; return; }
+  game.state = 'play';
+  game.t0 = Sound.now() + 0.4 + COUNT_IN() * spb();
+  for (let k = 0; k < COUNT_IN(); ++k) Sound.click(game.t0 - (COUNT_IN() - k) * spb(), k === 0);
+  game.nextAcc = 0; game.nextGuide = 0;
+}
+function stop() { game.state = 'title'; Sound.silence(); }
+$('go').onclick = () => { if (game.state === 'play') stop(); else start(false); };
+$('free').onclick = () => { if (game.state === 'free') stop(); else start(true); };
+
+// schedule what's due in the next 0.3 s
+function schedule() {
+  const until = Sound.now() + 0.3, T = b => game.t0 + b * spb();
+  while (game.nextAcc < piece.accomp.length && T(piece.accomp[game.nextAcc][0]) < until) {
+    const [b, m, d] = piece.accomp[game.nextAcc++]; Sound.note(m, T(b), d * spb());
+  }
+  while (game.nextGuide < piece.melody.length && T(piece.melody[game.nextGuide][0]) < until) {
+    const [b, m, d] = piece.melody[game.nextGuide++];
+    if (opts.guide) Sound.guideNote(m, T(b), d * spb(), opts.level === 'easy' ? 0.07 : 0.045);
+  }
+}
+
+// what the player is doing now: pitch (midi, fractional, before and after Easy's snap), volume 0..1, vibrato cents
+function input() {
+  const live = Mugic.connected;
+  let raw, vol, vib = 0;
+  if (live) {
+    raw = game.range.mid + Mugic.pitch / game.range.degPerSemi;
+    const twist = Math.max(0, Mugic.roll);
+    if (opts.roll === 'volume') vol = clamp01(1 - twist / SILENT_ROLL);
+    else { vol = 1; vib = clamp01(Math.abs(Mugic.roll) / 45) * MAX_VIBRATO; }
+  } else {
+    raw = mOfY(game.mouse.y); vol = game.mouse.down ? 1 : 0;
+  }
+  raw = clamp(raw, game.range.lo, game.range.hi);
+  const v = vibrato(raw, vib);
+  let m = raw;
+  if (opts.level === 'easy') {   // pull toward the nearest note of the piece's scale, keeping a little of the wobble
+    let best = Math.round(raw);
+    for (let k = 0; k <= 6; ++k) {
+      const a = Math.round(raw) + k, b = Math.round(raw) - k;
+      const ok = x => piece.scale.has(((x % 12) + 12) % 12);
+      const c = [a, b].filter(ok).sort((x, y) => Math.abs(x - raw) - Math.abs(y - raw))[0];
+      if (c != null) { best = c; break; }
+    }
+    m = best + (raw - best) * 0.3;
+  }
+  return { raw, m, vol, vib, live, center: opts.level === 'easy' ? m : v.center, vibrato: v.on };
+}
+
+// Is the hand making vibrato? Two ways to tell, either will do:
+//  - the pitch swings around a line fitted through it since the note began (or the last VIB_WINDOW s), VIB_DEPTH
+//    cents (half the swing) at VIB_RATE times a second;
+//  - the accelerometer shakes at VIB_RATE, at least `opts.motion` (half the swing, in the MUGIC's acc units) on its
+//    busiest axis: a vibrato too small to move the angles still moves the hand.
+// Roll = vibrato: the twist is the vibrato. Grading uses the pitch averaged over about one cycle (`center`).
+const pitchHist = [], accHist = [];
+let noteStart = 0;
+// swing of samples [[t, v], ...] around their trend: { depth (half the swing), rate (crossings per second / 2) }
+function swing(h, hyst) {
+  const n = h.length, t = h[n - 1][0];
+  let st = 0, sv = 0, stt = 0, stv = 0;
+  for (const [ti, v] of h) { const x = ti - t; st += x; sv += v; stt += x * x; stv += x * v; }
+  const slope = (n * stv - st * sv) / (n * stt - st * st || 1), c0 = (sv - slope * st) / n;
+  let lo = Infinity, hi = -Infinity, cross = 0, side = 0;
+  const res = h.map(([ti, v]) => v - (c0 + slope * (ti - t)));
+  for (const r of res) { lo = Math.min(lo, r); hi = Math.max(hi, r); }
+  const band = hyst * (hi - lo) / 2;
+  for (const r of res) { const sd = r > band ? 1 : r < -band ? -1 : 0; if (sd && side && sd !== side) ++cross; if (sd) side = sd; }
+  return { depth: (hi - lo) / 2, rate: cross / 2 / (t - h[0][0] || 1) };
+}
+const inRate = r => r >= VIB_RATE[0] && r <= VIB_RATE[1];
+function vibrato(raw, rollVib) {
+  const t = performance.now() / 1000;
+  pitchHist.push([t, raw]);
+  while (pitchHist.length && pitchHist[0][0] < t - Math.max(VIB_WINDOW, CYCLE)) pitchHist.shift();
+  const cyc = pitchHist.filter(([ti]) => ti >= Math.max(t - CYCLE, noteStart)),   // fresh at each note
+    center = cyc.reduce((a, [, v]) => a + v, 0) / cyc.length;
+  game.motion = null;
+  if (opts.roll === 'vibrato') return { on: rollVib >= 10, center };
+  let on = false;
+  const mine = pitchHist.filter(([ti]) => ti >= Math.max(noteStart, t - VIB_WINDOW));
+  if (mine.length >= 12 && mine[mine.length - 1][0] - mine[0][0] >= 0.3) {
+    const sw = swing(mine.map(([ti, v]) => [ti, v * 100]), 0.1);
+    on = sw.depth >= VIB_DEPTH[0] && sw.depth <= VIB_DEPTH[1] && inRate(sw.rate);
+  }
+  if (Mugic.connected && Mugic.acc) {
+    accHist.push([t, ...Mugic.acc]);
+    while (accHist[0][0] < t - VIB_WINDOW) accHist.shift();
+    if (accHist.length >= 12) {
+      const sw = [1, 2, 3].map(k => swing(accHist.map(r => [r[0], r[k]]), 0.3)).reduce((a, b) => b.depth > a.depth ? b : a);
+      game.motion = sw;
+      if (sw.depth >= opts.motion && inRate(sw.rate)) on = true;
+    }
+  }
+  return { on, center };
+}
+
+function noteAt(b) {
+  for (let i = 0; i < piece.melody.length; ++i) {
+    const [s, , d] = piece.melody[i];
+    if (s > b) return -1;
+    if (b < s + d) return i;
+  }
+  return -1;
+}
+
+// in tune / close / off for a pitch against a target (cents)
+const grade = (m, target) => { const c = Math.abs(m - target) * 100, t = TOL[opts.level]; return c <= t ? 'good' : c <= t * 2.5 ? 'close' : 'off'; };
+const COLORS = { good: '#4dff88', close: '#4da3ff', off: '#ff5a5a', none: '#c8d0e0' };
+
+let lastT = performance.now();
+function frame() {
+  const nowMs = performance.now(), dt = Math.min(0.1, (nowMs - lastT) / 1000); lastT = nowMs;
+  const inp = input();
+  let state = 'none', target = null;
+  if (game.state === 'play' || game.state === 'free') {
+    Sound.play(inp.m, inp.vol, inp.vib);
+    if (game.state === 'play') {
+      schedule();
+      const b = beatNow(), i = noteAt(b);
+      if (i >= 0) {
+        target = piece.melody[i][1];
+        noteStart = performance.now() / 1000 - (b - piece.melody[i][0]) * spb();
+        state = score(i, b, inp, dt);
+      } else if (b > 0 && inp.vol > 0.4 && opts.level !== 'easy') game.rest += dt;   // sounding through a rest
+      if ((b - piece.end) * spb() > 1) finish();
+    }
+  } else Sound.silence();
+  game.trail.push({ t: nowMs / 1000, m: inp.m, vol: inp.vol, state });
+  while (game.trail.length && game.trail[0].t < nowMs / 1000 - NOW_X / PX_PER_SEC) game.trail.shift();
+  draw(inp, state, target);
+  requestAnimationFrame(frame);
+}
+
+// what the score asks of note i now: its loudness (Normal, Hard; roll = volume) and vibrato (espressivo, and on
+// Hard every long note, once the note has settled)
+function asks(i, b) {
+  const easy = opts.level === 'easy', [s] = piece.melody[i];
+  const loud = !easy && opts.roll === 'volume' ? PIECES_LOUD(b) : null;
+  const vib = !easy && (piece.espr[i] || (opts.level === 'hard' && piece.long[i]));
+  return { loud, vib, settled: (b - s) * spb() >= VIB_SETTLE };
+}
+const PIECES_LOUD = b => THEREMIN_PIECES.loudAt(piece, b);
+
+// score one frame of note i; returns the dot's state. Pitch is graded on the note your vibrato centers on.
+function score(i, b, inp, dt) {
+  const ns = game.noteScore[i], a = asks(i, b), t = game.tally;
+  ns.total += dt; t.total += dt;
+  game.hint = null;
+  if (inp.vol <= 0.25) { game.hint = 'Play!'; return 'off'; }
+  const state = grade(inp.center, piece.melody[i][1]), pitchOk = state === 'good';
+  if (pitchOk) { ns.good += dt; t.pitch += dt; }
+  let ok = pitchOk;
+  if (a.loud != null) {
+    const off = inp.vol - a.loud, loudOk = Math.abs(off) <= LOUD_TOL;
+    t.loudTotal += dt; if (loudOk) t.loud += dt; else { ok = false; game.hint = off < 0 ? 'Louder' : 'Softer'; }
+  }
+  if (a.vib && a.settled) {
+    t.vibTotal += dt; if (inp.vibrato) t.vib += dt; else { ok = false; game.hint = 'Vibrato!'; }
+  }
+  if (ok) t.all += dt;
+  return state;
+}
+
+// Easy: % of note time in tune. Normal: in tune 80%, loudness 10%, vibrato 10% (of what the piece asks).
+// Hard: % of note time in tune AND at the marked loudness AND with vibrato where asked; sounding through rests counts.
+function result() {
+  const t = game.tally, f = (x, of) => of ? x / of : null;
+  const parts = { pitch: f(t.pitch, t.total), loud: f(t.loud, t.loudTotal), vib: f(t.vib, t.vibTotal) };
+  let pct;
+  if (opts.level === 'hard') pct = f(t.all, t.total + game.rest * 0.5);
+  else if (opts.level === 'normal') {
+    const w = [[0.8, f(t.pitch, t.total + game.rest * 0.5)], [0.1, parts.loud], [0.1, parts.vib]].filter(([, x]) => x != null);
+    pct = w.reduce((a, [k, x]) => a + k * x, 0) / w.reduce((a, [k]) => a + k, 0);
+  } else pct = parts.pitch;
+  return { pct: Math.round(100 * (pct || 0)), parts };
+}
+
+function finish() {
+  Sound.silence();
+  const { pct, parts } = result();
+  const hit = game.noteScore.filter(n => n.total && n.good / n.total >= 0.7).length;
+  game.report = { pct, hit, of: piece.melody.length, parts };
+  game.state = 'done';
+  if (Mugic.connected && !game.posted) {
+    game.posted = true;
+    Scores.submit({ ...board(), score: pct }).then(showBoard);
+  }
+}
+
+// ---------- drawing ----------
+function draw(inp, state, target) {
+  g2.fillStyle = '#05060a'; g2.fillRect(0, 0, W, H);
+  const { lo, hi } = game.range, row = (BOTTOM - TOP) / (hi - lo);
+  // pitch grid and keyboard
+  for (let m = Math.ceil(lo); m <= hi; ++m) {
+    const y = yOf(m), black = [1, 3, 6, 8, 10].includes(m % 12), inScale = piece.scale.has(m % 12);
+    g2.fillStyle = black ? '#1a1f2c' : '#d8deea'; g2.fillRect(0, y - row / 2, KEYS - (black ? 22 : 0), row - 1);
+    g2.strokeStyle = inScale ? '#1d2433' : '#10141c'; g2.beginPath(); g2.moveTo(KEYS, y); g2.lineTo(W, y); g2.stroke();
+    if (m % 12 === 0 || (target != null && m === target)) {
+      g2.fillStyle = m === target ? '#4da3ff' : '#556070'; g2.font = '11px ui-monospace, monospace'; g2.fillText(noteName(m), KEYS + 4, y - 3);
+    }
+  }
+  // the melody bars and your trail, right of the keyboard
+  g2.save(); g2.beginPath(); g2.rect(KEYS, 0, W - KEYS, H); g2.clip();
+  if (game.state !== 'free') {
+    const b = game.state === 'play' ? beatNow() : game.state === 'done' ? piece.end : -COUNT_IN();
+    const xOf = beat => NOW_X + (beat - b) * spb() * PX_PER_SEC;
+    piece.melody.forEach(([s, m, d], i) => {
+      const x0 = xOf(s), x1 = xOf(s + d);
+      if (x1 < KEYS || x0 > W) return;
+      const ns = game.noteScore && game.noteScore[i], past = x1 < NOW_X, now = x0 <= NOW_X && x1 > NOW_X;
+      g2.fillStyle = past && ns && ns.total ? (ns.good / ns.total >= 0.7 ? '#1f7a43' : '#7a2a2a') : now ? '#4da3ff' : '#3b4458';
+      const y = yOf(m), a = asks(i, s), h = row * 0.8 * (a.loud == null ? 1 : 0.35 + 0.65 * a.loud);
+      g2.fillRect(Math.max(KEYS, x0) + 1, y - h / 2, x1 - Math.max(KEYS, x0) - 2, h);
+      if (a.vib) {   // vibrato wanted: a wave along the top of the bar
+        g2.strokeStyle = '#e8f0ff'; g2.lineWidth = 1.5; g2.beginPath();
+        for (let x = Math.max(KEYS, x0) + 2; x < x1 - 2; x += 2) g2.lineTo(x, y - h / 2 - 4 + 2.5 * Math.sin(x / 3));
+        g2.stroke(); g2.lineWidth = 1;
+      }
+      if (x0 > KEYS && x1 - x0 > 26 && row > 9) { g2.fillStyle = '#e8f0ff'; g2.font = '10px ui-monospace, monospace'; g2.fillText(noteName(m), x0 + 4, y + 3); }
+    });
+    // the dynamics, above the lane (Normal, Hard, roll = volume)
+    if (piece.dynamics && opts.level !== 'easy' && opts.roll === 'volume') {
+      g2.font = 'italic bold 15px Georgia, serif'; g2.fillStyle = '#c8d0e0'; g2.strokeStyle = '#c8d0e0';
+      for (const [mb, v] of piece.dynamics.marks) { const x = xOf(mb); if (x > KEYS - 20 && x < W) g2.fillText(THEREMIN_PIECES.MARKS[v] || '', x, TOP - 8); }
+      for (const [a, e, k] of piece.dynamics.hairpins) {
+        const xa = xOf(a), xe = xOf(e), yy = TOP - 13, wide = k === 'cresc' ? [xe, xa] : [xa, xe];
+        if (xe < KEYS || xa > W) continue;
+        g2.beginPath(); g2.moveTo(wide[0], yy - 5); g2.lineTo(wide[1], yy); g2.lineTo(wide[0], yy + 5); g2.stroke();
+      }
+    }
+  }
+  // now line, your trail and dot
+  g2.strokeStyle = '#2a3040'; g2.beginPath(); g2.moveTo(NOW_X, TOP - 10); g2.lineTo(NOW_X, BOTTOM + 10); g2.stroke();
+  const tNow = performance.now() / 1000;
+  for (let i = 1; i < game.trail.length; ++i) {
+    const a = game.trail[i - 1], c = game.trail[i];
+    if (c.vol < 0.05) continue;
+    g2.strokeStyle = COLORS[c.state]; g2.globalAlpha = 0.25 + 0.75 * c.vol; g2.lineWidth = 3;
+    g2.beginPath(); g2.moveTo(NOW_X - (tNow - a.t) * PX_PER_SEC, yOf(a.m)); g2.lineTo(NOW_X - (tNow - c.t) * PX_PER_SEC, yOf(c.m)); g2.stroke();
+  }
+  g2.restore(); g2.globalAlpha = 1; g2.lineWidth = 1;
+  const y = yOf(inp.m), r = 6 + 8 * inp.vol;
+  g2.fillStyle = COLORS[state]; g2.globalAlpha = 0.3 + 0.7 * inp.vol;
+  g2.beginPath(); g2.arc(NOW_X, y, r, 0, Math.PI * 2); g2.fill(); g2.globalAlpha = 1;
+  g2.fillStyle = '#c8d0e0'; g2.font = '12px ui-monospace, monospace';
+  const cents = Math.round((inp.m - Math.round(inp.m)) * 100);
+  g2.fillText(`${noteName(Math.round(inp.m))} ${cents >= 0 ? '+' : ''}${cents}¢${inp.vibrato ? ' 〰' : ''}`, NOW_X + 18, y + 4);
+  // volume meter
+  g2.fillStyle = '#1a1f2c'; g2.fillRect(W - 24, TOP, 12, BOTTOM - TOP);
+  g2.fillStyle = '#4da3ff'; g2.fillRect(W - 24, BOTTOM - (BOTTOM - TOP) * inp.vol, 12, (BOTTOM - TOP) * inp.vol);
+  const want = game.state === 'play' && beatNow() >= 0 && opts.level !== 'easy' && opts.roll === 'volume' ? PIECES_LOUD(beatNow()) : null;
+  if (want != null) {   // the marked loudness: a band on the meter
+    const y0 = BOTTOM - (BOTTOM - TOP) * Math.min(1, want + LOUD_TOL), y1 = BOTTOM - (BOTTOM - TOP) * Math.max(0, want - LOUD_TOL);
+    g2.strokeStyle = '#4dff88'; g2.lineWidth = 2; g2.strokeRect(W - 28, y0, 20, y1 - y0); g2.lineWidth = 1;
+  }
+  // status, front and center
+  let big, small, color = '#4da3ff';
+  if (game.state === 'title') { big = 'Calibrate, then press Play'; small = `${piece.composer} — ${piece.title}`; }
+  else if (game.state === 'free') { big = 'Free play'; small = 'Tilt for pitch, twist to fade. Press Free play again to stop.'; }
+  else if (game.state === 'play') {
+    const b = beatNow();
+    if (b < 0) { big = `Get ready… ${Math.ceil(-b)}`; small = `${piece.composer} — ${piece.title}`; }
+    else {
+      const pct = game.tally.total ? result().pct : 100;
+      const first = piece.melody[0][0];
+      big = b < first ? `Intro — you come in after ${Math.ceil(first - b)} beats` : `${pct}% in tune`;
+      small = b < first ? `${piece.composer} — ${piece.title}`
+        : game.rest > 0.5 && inp.vol > 0.4 && target == null ? 'Rest — twist to silence'
+        : target != null && game.hint ? game.hint : `${piece.composer} — ${piece.title}`;
+      color = state === 'good' ? '#4dff88' : state === 'off' ? '#ff5a5a' : '#4da3ff';
+    }
+  } else if (game.state === 'done') {
+    const r = game.report;
+    const pc = x => Math.round(100 * x) + '%';
+    big = `${r.pct}% — ${r.hit} of ${r.of} notes in tune`;
+    const extra = [r.parts.loud != null && 'dynamics ' + pc(r.parts.loud), r.parts.vib != null && 'vibrato ' + pc(r.parts.vib)].filter(Boolean).join(' · ');
+    r.extra = extra; small = (r.extra ? r.extra + ' · ' : '') + (r.pct >= 80 ? 'Clara would be proud. Press Play to go again.' : 'Press Play to go again.');
+    color = r.pct >= 70 ? '#4dff88' : '#4da3ff';
+  }
+  g2.textAlign = 'center'; g2.fillStyle = color; g2.font = 'bold 30px ui-monospace, monospace'; g2.fillText(big, W / 2, 42);
+  g2.fillStyle = '#7a8499'; g2.font = '14px ui-monospace, monospace'; g2.fillText(small, W / 2, 66); g2.textAlign = 'left';
+  const mv = $('motionVal');
+  if (mv) mv.textContent = `${(+opts.motion).toFixed(2)}` + (game.motion ? ` · now ${game.motion.depth.toFixed(2)} at ${game.motion.rate.toFixed(1)}/s` : '');
+  $('go').textContent = game.state === 'play' ? 'Stop' : 'Play';
+  $('free').textContent = game.state === 'free' ? 'Stop' : 'Free play';
+}
+
+const toCanvas = e => { const r = cv.getBoundingClientRect(); return (e.clientY - r.top) * H / r.height; };
+cv.addEventListener('pointermove', e => { game.mouse.y = toCanvas(e); });
+cv.addEventListener('pointerdown', e => { game.mouse.y = toCanvas(e); game.mouse.down = true; Sound.init(); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointerup', () => { game.mouse.down = false; });
+
+// scoreboard: one game id per level (the table's mode only allows normal/hard), the piece's number as its level
+const board = () => ({ game: 'theremin' + opts.level, level: THEREMIN_PIECES.list.indexOf(piece) + 1 });
+const LEVELS = { easy: 'EASY', normal: 'NORMAL', hard: 'HARD' };
+const showBoard = () => {
+  $('boardTitle').textContent = `GLOBAL TOP 10 — ${piece.title.toUpperCase()} — ${LEVELS[opts.level]}`;
+  Scores.top(board().game, board()).then(rows => Scores.render($('board'), rows, '%'));
+};
+showBoard();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

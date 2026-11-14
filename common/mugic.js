@@ -2,6 +2,7 @@
 // OSC parsing, calibration, and a control panel with live meters.
 //   Mugic.roll / .pitch / .yaw  degrees from the calibrated pose
 //   Mugic.energy                |acc|^2 minus the at-rest baseline
+//   Mugic.acc                   the raw accelerometer [x, y, z] of the last packet (null until one arrives)
 //   Mugic.onFlick               called once per energy spike above settings.thresh × flickScale
 //   Mugic.flickScale            per-game multiplier on the shared flick threshold (default 1)
 //   Mugic.onFlickDir(d)         called ~150 ms after a flick with d = {roll, pitch, yaw}: the largest angle
@@ -19,7 +20,7 @@ const Mugic = (() => {
   const STORE = 'mugicArcade';
   const AXES = { roll: 'Roll', pitch: 'Pitch', yaw: 'Yaw' };
   const m = {
-    flickScale: 1, connected: false, deviceCode: null, battery: null, batteryVolts: null, flicks: 0, lastFlickAt: -Infinity, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
+    flickScale: 1, connected: false, deviceCode: null, battery: null, batteryVolts: null, flicks: 0, lastFlickAt: -Infinity, acc: null, roll: 0, pitch: 0, yaw: 0, energy: 0, onFlick: null, onFlickDir: null,
     // as mounted in the MUGIC: euler X = yaw, Y = pitch, Z = roll (reversed)
     settings: { rollAxis: 5, pitchAxis: 4, yawAxis: 3, invertRoll: true, invertPitch: false, invertYaw: false, thresh: 60 },
   };
@@ -80,6 +81,7 @@ const Mugic = (() => {
     if (f.length > BATT_VOLTS && !hub) battery(f[BATT_VOLTS]);
     const s = m.settings, ax = f[ACC], ay = f[ACC + 1], az = f[ACC + 2];
     raw = { energy: ax * ax + ay * ay + az * az };
+    m.acc = [ax, ay, az];
     for (const a in AXES) {
       raw[a] = f[s[a + 'Axis']];
       m[a] = wrap(raw[a] - zero[a]) * (s['invert' + cap(a)] ? -1 : 1);
