@@ -40,11 +40,16 @@ Every game also plays with the keyboard.
 | Piece | Folder | Controls |
 |---|---|---|
 | Conductor | `conductor/` | Each down-up **dip** of the hand (**pitch**) is a beat (or each **flick**); a still raised hand, then a preparatory beat + downbeat start the orchestra, which then follows your beat within ±40% of the marked tempo (Mountain King accelerates from ♩ = 70 to 140). The dip's height sets the dynamics (10° softest … 110° loudest). Cue a section **on its entry beat**: swing (**yaw**) ≥15° toward it, or, already facing it, dip ≥12° lower; a beat or two off confuses it. Hold the final fermata, cut off with a flick. Pieces: Canon in D, Ode to Joy, The Blue Danube (in one), In the Hall of the Mountain King. *Record practice* saves your motion against the score as JSON for tuning. Keyboard not ranked |
+| Theremin Hero | `theremin/` | Tilt (**pitch**) plays the note (3–5° per semitone, the calibrated pose is the middle of the piece's range); twist (**roll**) fades to silence — or sets the vibrato depth (*Roll controls*). Follow the scrolling melody: score = % of the time in tune (Easy snaps to the piece's notes, ±50 cents; Normal ±30; Hard ±15, which also counts sounding through rests). Optional quiet guide tone. Repertoire: Clara Rockmore's *The Art of the Theremin* (minus Stravinsky) plus Hymn to the Sun, added as they are written out; playable now: Ode to Joy (tutorial), Schubert's Ave Maria. Scoreboard per piece and level (`theremin<level>`). Mouse plays, not ranked |
 
 **Conductor sound:** string, wind, brass and percussion samples from the [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE)
 (CC0), cut to small looped mono WAVs in `conductor/samples/` by `python3 conductor/tools/build_samples.py`
 (pure Python; each piece loads only its instruments, 19 MB in all). Pieces are our own arrangements of public-domain works, in
 `conductor/pieces.js` (notes as `[beat, midi, beats]`, plus cues, dynamics, hairpins and the fermata).
+
+**Theremin Hero pieces:** melodies and accompaniments in `theremin/pieces.js`, converted from public-domain scores
+(MusicXML or MIDI) with `python3 -I theremin/tools/import_score.py SCORE --list`, then `--melody P1 --accomp P2`.
+Ave Maria is from the [OpenScore Lieder corpus](https://github.com/OpenScore/Lieder) (CC0).
 
 ## Requirements
 
