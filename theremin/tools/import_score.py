@@ -3,7 +3,9 @@
 
   python3 -I import_score.py SCORE --melody P1 --accomp P2 [--transpose K] [--from-bar N --to-bar M]
 
-Parts are MusicXML part ids (P1, P2, ...) or MIDI track numbers (0, 1, ...); --list shows them.
+Parts are MusicXML part ids (P1, P2, ...) or MIDI track numbers (0, 1, ...); --list shows them. PART:STAFF takes
+one staff of a part (a piano's right hand: --melody P1:1 --accomp P1, the accompaniment then leaves out the melody);
+PART:STAFF:VOICE one voice of it (when the melody is its own voice, e.g. P1:1:2).
 Prints JSON {"tempo": quarter bpm or null, "melody": [[beat, midi, beats], ...], "accomp": [...], "beatsPerBar": n} with beats in quarter notes
 from the first printed bar; paste it into theremin/pieces.js. Repeats are not expanded; ties are merged.
 """
@@ -49,16 +51,18 @@ def musicxml_parts(path):
                         continue
                     m = 12 * (int(p.findtext('octave')) + 1) + STEP[p.findtext('step')] + int(float(p.findtext('alter') or 0))
                     ties = {x.get('type') for x in el.findall('tie')}
-                    if 'stop' in ties and m in open_ties:
-                        open_ties[m][2] += d
-                        n = open_ties[m]
+                    staff, voice = el.findtext('staff') or '1', el.findtext('voice') or '1'
+                    key = (m, staff, voice)   # a tie joins notes of one voice; a chord tone elsewhere doesn't break it
+                    if 'stop' in ties and key in open_ties:
+                        open_ties[key][2] += d
+                        n = open_ties[key]
                     else:
-                        n = [start, m, d]
+                        n = [start, m, d, staff, voice]
                         notes.append(n)
                     if 'start' in ties:
-                        open_ties[m] = n
+                        open_ties[key] = n
                     else:
-                        open_ties.pop(m, None)
+                        open_ties.pop(key, None)
         parts[part.get('id')] = (names.get(part.get('id'), ''), notes, bar_start)
     tempo = next((float(s.get('tempo')) for s in root.iter('sound') if s.get('tempo')), None)
     return parts, meter, tempo
@@ -125,6 +129,7 @@ def main():
     ap.add_argument('--melody'); ap.add_argument('--accomp', default='')
     ap.add_argument('--transpose', type=int, default=0)
     ap.add_argument('--from-bar', type=int, default=1); ap.add_argument('--to-bar', type=int)
+    ap.add_argument('--melody-from-bar', type=int, default=1, help='notes before this bar go to the accompaniment')
     ap.add_argument('--list', action='store_true')
     a = ap.parse_args()
     parts, meter, tempo = (midi_parts if a.score.lower().endswith(('.mid', '.midi')) else musicxml_parts)(a.score)
@@ -132,23 +137,36 @@ def main():
         for pid, (name, notes, _) in parts.items():
             print(pid, repr(name), len(notes), 'notes, range', min(n[1] for n in notes), max(n[1] for n in notes))
         return
-    bars = parts[a.melody][2]
+    taken = set()
+    # a score's lengths are exact; a performed MIDI's notes overlap (legato), so there it's just the top at each onset
+    overlap = float('inf') if a.score.lower().endswith(('.mid', '.midi')) else 1e-6
+    bars = parts[a.melody.partition(':')[0]][2]
     t0 = bars[a.from_bar - 1] if bars else (a.from_bar - 1) * meter
     t1 = (bars[a.to_bar] if bars and a.to_bar < len(bars) else 1e9) if a.to_bar else 1e9
+    melody_from = bars[a.melody_from_bar - 1] if bars else (a.melody_from_bar - 1) * meter
 
-    def pick(pid, top_only):
-        notes = sorted(n for n in parts[pid][1] if t0 <= n[0] < t1 and n[2] > 0)
-        if top_only:   # one line: the highest note at each onset
+    def pick(spec, top_only):
+        pid, staff, voice = (spec.split(':') + ['', ''])[:3]
+        notes = sorted((n for n in parts[pid][1] if t0 <= n[0] < t1 and n[2] > 0 and (not staff or n[3:4] == [staff])
+                        and (not voice or n[4:5] == [voice])
+                        and id(n) not in taken), key=lambda n: n[:3])
+        if top_only:   # one line, the "skyline": the highest note at each onset, unless a higher one is still sounding
             best = {}
             for n in notes:
-                if n[0] not in best or n[1] > best[n[0]][1]:
+                if n[0] >= melody_from and (n[0] not in best or n[1] > best[n[0]][1]):
                     best[n[0]] = n
-            notes = sorted(best.values())
+            notes, cur = [], None
+            for n in sorted(best.values(), key=lambda n: n[:3]):
+                if cur is None or n[0] >= cur[0] + cur[2] - overlap or n[1] >= cur[1]:
+                    notes.append(n); cur = n
+            taken.update(id(n) for n in notes)
+            notes = [n[:3] for n in notes]
             for n, nxt in zip(notes, notes[1:]):   # legato overlaps: end each note where the next begins
                 n[2] = min(n[2], nxt[0] - n[0])
         return [[round(n[0] - t0, 4), n[1] + a.transpose, round(n[2], 4)] for n in notes]
 
-    out = {'beatsPerBar': meter, 'tempo': tempo, 'melody': pick(a.melody, True),
+    melody = pick(a.melody, True)
+    out = {'beatsPerBar': meter, 'tempo': tempo, 'melody': melody,
            'accomp': sorted(n for p in a.accomp.split(',') if p for n in pick(p, False))}
     json.dump(out, sys.stdout, separators=(',', ':'))
 
